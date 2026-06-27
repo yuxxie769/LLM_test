@@ -7,7 +7,7 @@
 本阶段已完成：
 
 1. 在 `WSL2 + Ubuntu-22.04` 下跑通本地 `vLLM`
-2. 直接使用本地模型目录 `/mnt/d/models/qwen2.5-7b-awq`
+2. 当前默认使用本地模型目录 `/mnt/d/models/qwen2.5-0.5b` 做低显存 smoke
 3. 在仓库内落地最小 `FastAPI` 网关实现
 4. 固化启动脚本、冒烟脚本、端到端验收脚本
 5. 修掉当前机器上的几类实际阻碍：
@@ -29,11 +29,19 @@
 
 ## 3. 当前默认运行参数
 
-- 模型目录：`/mnt/d/models/qwen2.5-7b-awq`
-- 服务模型名：`qwen-7b-awq-local`
+- 模型目录：`/mnt/d/models/qwen2.5-0.5b`
+- 服务模型名：`qwen-05b-local`
 - 默认 `vLLM` 端口：`19100`
 - 默认网关端口：`18080`
-- 默认 `gpu_memory_utilization`：`0.8`
+- Phase 1 验收脚本默认启用低显存 smoke 参数：
+  - `LOW_VRAM_MODE=1`
+  - `MAX_MODEL_LEN=512`
+  - `GPU_MEMORY_UTILIZATION=0.6`
+  - `DTYPE=half`
+  - `VLLM_ENFORCE_EAGER=1`
+  - `VLLM_CPU_OFFLOAD_GB=2`
+  - `VLLM_MAX_NUM_SEQS=1`
+  - `VLLM_MAX_NUM_BATCHED_TOKENS=256`
 - 默认关闭 `FlashInfer` sampler：`VLLM_USE_FLASHINFER_SAMPLER=0`
 
 ## 4. 你怎么验收
@@ -48,7 +56,7 @@ source .venv/bin/activate
 ### 4.1 一条命令验收整条链路
 
 ```bash
-GPU_MEMORY_UTILIZATION=0.8 ./scripts/verify_phase1_local.sh
+./scripts/verify_phase1_local.sh
 ```
 
 通过标准：
@@ -67,7 +75,14 @@ GPU_MEMORY_UTILIZATION=0.8 ./scripts/verify_phase1_local.sh
 先起 `vLLM`：
 
 ```bash
-GPU_MEMORY_UTILIZATION=0.8 ./scripts/run_vllm_local.sh
+LOW_VRAM_MODE=1 \
+MAX_MODEL_LEN=512 \
+GPU_MEMORY_UTILIZATION=0.6 \
+VLLM_ENFORCE_EAGER=1 \
+VLLM_CPU_OFFLOAD_GB=2 \
+VLLM_MAX_NUM_SEQS=1 \
+VLLM_MAX_NUM_BATCHED_TOKENS=256 \
+./scripts/run_vllm_local.sh
 ```
 
 另开一个 shell，验证：
@@ -78,7 +93,7 @@ curl --noproxy "*" http://127.0.0.1:19100/v1/models
 curl --noproxy "*" -X POST http://127.0.0.1:19100/v1/chat/completions \
   -H "Content-Type: application/json" \
   --data '{
-    "model": "qwen-7b-awq-local",
+    "model": "qwen-05b-local",
     "messages": [{"role": "user", "content": "请用一句话介绍你自己。"}],
     "max_tokens": 64
   }'
@@ -98,7 +113,7 @@ curl --noproxy "*" -X POST http://127.0.0.1:18080/v1/chat/completions \
   -H "Authorization: Bearer local-dev-token" \
   -H "Content-Type: application/json" \
   --data '{
-    "model": "qwen-7b-awq-local",
+    "model": "qwen-05b-local",
     "messages": [{"role": "user", "content": "请返回一个 JSON，字段只有 ok。"}],
     "max_tokens": 64
   }'
@@ -110,7 +125,7 @@ curl --noproxy "*" -X POST http://127.0.0.1:18080/v1/chat/completions \
 curl --noproxy "*" -X POST http://127.0.0.1:18080/v1/chat/completions \
   -H "Content-Type: application/json" \
   --data '{
-    "model": "qwen-7b-awq-local",
+    "model": "qwen-05b-local",
     "messages": [{"role": "user", "content": "test"}],
     "max_tokens": 16
   }'

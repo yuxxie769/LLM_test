@@ -292,9 +292,11 @@ llm-bench/
 
 - `results/raw/benchmark/`
 - `results/raw/prometheus/`
+- `results/raw/benchmark/<batch_run_id>/manifest.json`
 - `results/baseline_metrics.csv`
 - `results/baseline_service_metrics.csv`
 - `results/baseline_summary.md`
+- `batch validation summary`
 - 2 张图：
   - 并发数 vs `QPS`
   - 并发数 vs `P95 latency`

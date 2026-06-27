@@ -3,7 +3,7 @@ set -euo pipefail
 
 VLLM_BASE_URL="${VLLM_BASE_URL:-http://127.0.0.1:19100}"
 GATEWAY_BASE_URL="${GATEWAY_BASE_URL:-http://127.0.0.1:18080}"
-MODEL_NAME="${MODEL_NAME:-qwen-7b-awq-local}"
+MODEL_NAME="${MODEL_NAME:-qwen-05b-local}"
 GATEWAY_TOKEN="${GATEWAY_TOKEN:-local-dev-token}"
 
 echo "[smoke] vLLM health"
