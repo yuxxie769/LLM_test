@@ -1,0 +1,5 @@
+.venv/
+logs/*
+!logs/.gitkeep
+results/*
+!results/.gitkeep

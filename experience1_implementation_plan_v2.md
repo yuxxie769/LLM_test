@@ -2,10 +2,10 @@
 
 ## 目标
 
-这个项目的目标不是“证明我会做底层 CUDA 优化”，而是建立一套**可运行、可压测、可对比、可写进简历**的大模型推理服务实验闭环，最终支撑这 4 条简历表述：
+这个项目的目标不是“证明我会做底层 CUDA 优化”或“从零造一个 benchmark 框架”，而是基于现有 **LLM serving / benchmark / observability** 工具，建立一套**可运行、可压测、可对比、可复现、可写进简历**的大模型推理服务实验闭环，最终支撑这 4 条简历表述：
 
 1. 基于 **vLLM** 部署 Qwen 模型服务，并在前面增加轻量 FastAPI 网关  
-2. 对不同并发、输入长度、输出长度场景做压测，采集 **QPS / P95 / TTFT / tokens/s / error rate**  
+2. 基于原生 benchmark 与服务侧指标，对不同并发、输入长度、输出长度场景做压测，采集 **QPS / P95 / TTFT / TPOT / ITL / error rate / GPU 指标**  
 3. 对关键 serving 参数做对比实验，总结吞吐与延迟 trade-off  
 4. 对比 **FP16/BF16** 与 **AWQ-INT4** 模型在显存、吞吐与延迟上的差异
 
@@ -16,7 +16,7 @@
 | # | Bullet | 核心产出 |
 |---|--------|---------|
 | 1 | vLLM 部署 + FastAPI 网关 | 可运行的推理服务 |
-| 2 | Locust 压测 | 压测脚本 + 指标采集 |
+| 2 | 原生 benchmark + 指标采集 | 矩阵编排脚本 + 两层指标采集 + baseline 报告 |
 | 3 | 参数调优 | 参数对比实验 + 调优结论 |
 | 4 | FP16/BF16 vs AWQ-INT4 对比 | 量化对比报告 |
 
@@ -79,6 +79,8 @@ Phase 0 → Phase 1 → Phase 2 → Phase 4 → Phase 3
 - Python 3.10+
 - CUDA 12.x
 - Linux
+- 如果是本地 Windows 机器，优先走 `WSL2 + Ubuntu`；进入依赖安装前先确认 WSL 内 `/dev/dxg` 与 `nvidia-smi` 正常，并把项目放在 WSL Linux 文件系统而不是 `/mnt/<盘符>/...`
+- 在受限沙箱、代理终端或某些自动化会话里，`nvidia-smi` 可能出现假阴性；这类结果需要回到正常 WSL 终端复核
 
 ---
 
@@ -89,16 +91,28 @@ Phase 0 → Phase 1 → Phase 2 → Phase 4 → Phase 3
 - 模型：`Qwen2.5-7B-Instruct`
 - 量化模型：`Qwen2.5-7B-Instruct-AWQ`
 - 接口：OpenAI-compatible `/v1/chat/completions`
-- 主压测工具：`Locust`
+- 主 benchmark 工具：优先 `vLLM` 原生 benchmark，必要时用 `SGLang` 或 `GenAI-Perf` 做交叉验证
+- `Locust` 仅作为网关链路验证和补充性黑盒压测工具
 
 ### 0.2 固定第一版指标
 
-- `QPS`
-- `P95 latency`
-- `TTFT`
-- `tokens/s`
-- `error rate`
-- `GPU memory used`
+第一版指标分成两层：
+
+1. **请求侧指标**
+   - `QPS`
+   - `P50 latency`
+   - `P95 latency`
+   - `TTFT`
+   - `TPOT`
+   - `ITL`
+   - `error rate`
+2. **服务侧指标**
+   - `GPU memory used`
+   - `num_requests_running`
+   - `num_requests_waiting`
+   - `gpu_cache_usage_perc`
+   - `prompt throughput`
+   - `generation throughput`
 
 ### 0.3 固定第一版 workload
 
@@ -141,6 +155,7 @@ vllm serve Qwen/Qwen2.5-7B-Instruct \
 
 - 先以单模型、单卡、默认配置跑通
 - 第一版不要急着改太多 serving 参数
+- 如果是本地 WSL 环境，先做 GPU 预检；`nvidia-smi` 不通时，不要继续进入 `pip install vllm` 和模型启动排查
 
 ### 1.2 FastAPI 网关
 
@@ -195,29 +210,36 @@ llm-bench/
 
 ---
 
-## Phase 2：压测脚本与指标采集
+## Phase 2：原生 Benchmark + 矩阵编排 + 指标采集
 
 ### 2.1 工具选择
 
 第一版建议：
 
-- **Locust**：主压测工具
-- **hey**：仅用于 smoke test
+- **vLLM 原生 benchmark**：主方案
+- **SGLang benchmark**：可选交叉验证
+- **GenAI-Perf**：可选专业 benchmark 对照
+- **Prometheus metrics**：服务侧指标主采集来源
+- **Locust / hey**：仅用于网关链路验证和补充性黑盒测试
 
 第一版先**不使用 `wrk`**，避免维护多套压测逻辑。
 
 ### 2.2 压测模式
 
-分两类：
+分两层：
 
-1. **非流式压测**
-   - 用来采集 `QPS / P95 / error rate / 请求级 tokens/s`
-2. **流式压测**
-   - 用来单独采集 `TTFT`
+1. **benchmark 执行层**
+   - 负责执行单个固定 case
+   - 由 `vLLM` 原生 benchmark 或其他现成工具完成
+2. **实验编排层**
+   - 负责展开 workload 矩阵
+   - 逐组调用 benchmark 命令
+   - 同步抓取 `/metrics`
+   - 统一落盘原始结果和汇总结果
 
-不要试图一套脚本同时把所有指标做得特别完美，第一版分开测更稳。
+不要把“多维矩阵”理解成“自己重写 benchmark 工具”。第一版只需要实现一个很薄的实验编排层。
 
-### 2.3 Locust workload
+### 2.3 workload 矩阵
 
 第一版矩阵：
 
@@ -229,24 +251,49 @@ llm-bench/
 
 建议 prompt 模板固定，减少随机波动。
 
-### 2.4 指标定义
+补充说明：
+
+- 非流式矩阵用于 `QPS / latency / error rate`
+- 流式子矩阵用于 `TTFT / TPOT / ITL`
+- 不要把 workload 矩阵、模型对比和参数 sweep 做全笛卡尔积
+
+### 2.4 两层指标定义
+
+#### 请求侧指标
 
 | 指标 | 说明 |
 |------|------|
 | `QPS` | 总请求数 / 总测试时间 |
+| `P50 latency` | 请求总延迟的 50 分位 |
 | `P95 latency` | 请求总延迟的 95 分位 |
 | `TTFT` | 流式模式下首 token 返回时间 |
-| `tokens/s` | `completion_tokens / 总响应时间` 的汇总统计 |
+| `TPOT` | 每输出 token 的平均时间 |
+| `ITL` | 相邻 token 间延迟 |
 | `error rate` | 非 200 响应占比 |
+
+#### 服务侧指标
+
+| 指标 | 说明 |
+|------|------|
+| `GPU memory used` | 显存占用 |
+| `num_requests_running` | 正在执行的请求数 |
+| `num_requests_waiting` | 排队请求数 |
+| `gpu_cache_usage_perc` | KV cache / GPU cache 使用率 |
+| `prompt throughput` | prompt token 吞吐 |
+| `generation throughput` | generation token 吞吐 |
 
 说明：
 
-- `TTFT` 应单独在 `stream=True` 下测
-- `tokens/s` 第一版按请求级近似统计即可，不必一开始过度细化到 TPOT
+- `TTFT / TPOT / ITL` 建议优先使用原生 benchmark 输出
+- 服务侧指标从 `/metrics` 抓取，而不是靠人工看 `nvidia-smi`
+- 结论需要同时参考请求侧和服务侧两层指标
 
 ### 2.5 第一版结果产物
 
+- `results/raw/benchmark/`
+- `results/raw/prometheus/`
 - `results/baseline_metrics.csv`
+- `results/baseline_service_metrics.csv`
 - `results/baseline_summary.md`
 - 2 张图：
   - 并发数 vs `QPS`
@@ -255,8 +302,10 @@ llm-bench/
 ### 2.6 验收标准
 
 - [ ] 24 组 baseline 结果完整落盘
+- [ ] 请求侧与服务侧指标都能落盘
 - [ ] 至少能稳定复现 2 次
 - [ ] 能给出一段文字总结：不同并发、不同上下文长度下的主要变化趋势
+- [ ] 能结合服务侧指标解释性能变化原因
 
 ---
 
@@ -446,7 +495,7 @@ vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
 ### 最终简历可落的表述
 
 - 基于 vLLM 部署 Qwen 系列模型服务，封装 OpenAI-compatible API，并通过 FastAPI 实现参数校验、异常处理与结构化日志记录
-- 使用 Locust 对不同并发、输入长度和输出长度场景进行压测，统计 QPS、P95 latency、TTFT、tokens/s 与错误率等指标
+- 基于原生 benchmark 工具与服务侧 metrics 构建可复现实验流程，对不同并发、输入长度和输出长度场景进行压测，统计 QPS、P95 latency、TTFT、TPOT、ITL 与错误率等指标
 - 对比 `max_model_len`、`max_num_batched_tokens` 等配置对吞吐、延迟与显存压力的影响，形成推理服务调优结论
 - 完成 FP16/BF16 与 AWQ-INT4 模型服务对比实验，分析量化对显存占用、吞吐与延迟表现的影响
 
@@ -455,6 +504,6 @@ vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
 ## 执行建议
 
 - GPU 机只跑模型服务与监控
-- Locust 尽量跑在本地机器或另一台便宜的 CPU 机上
+- benchmark runner 与结果聚合可以跑在本地机器或另一台 CPU 机上
 - 所有结论必须以实测为准，不要预设“应该提升多少”
 - 第一版先做完闭环，再考虑扩展到第二模型、第二量化方案或更复杂参数
