@@ -2,6 +2,28 @@
 
 更新时间：2026-06-28
 
+## 0. 当前有效结论（RTX 5090 环境）
+
+以下结论替代下文旧的 `V100S` 记录，作为当前机器的主结论：
+
+- 当前机器：`NVIDIA GeForce RTX 5090`，Compute Capability `12.0 (sm_120)`，显存 `32 GiB`。
+- 当前可用运行栈：`torch 2.11.0+cu130`、`vllm 0.23.0`、`transformers 5.12.1`、`tokenizers 0.22.2`。
+- 本次重建环境的三层根因是：旧 `.venv` 里的 `flashinfer` 二进制链损坏；`torch 2.6.0+cu124 / vllm 0.8.5` 不支持 `sm_120`；根分区空间不足，无法直接装入新栈。
+- 当前 `.venv` 已切到新环境，并保留 `.venv.new -> .venv` 符号链接，以兼容 `uv` 生成的不可重定位虚拟环境。
+- `Phase 1` 已在这套新环境上重新验证通过，`./scripts/verify_phase1_local.sh` 最终输出 `phase1 verification complete`。
+- `Phase 2` 默认模型最小 smoke 已重新验证通过：`batch_run_id=phase2smoke-20260628T111721Z`。
+- `Phase 2` 的 `7B-AWQ baseline` 也已在当前机器实际跑完并校验通过：`batch_run_id=phase2-awq-baseline-20260628T124711Z`。
+- 这次 AWQ baseline 的聚合产物位于 `results/batches/phase2-awq-baseline-20260628T124711Z/`，其中包含 `baseline_metrics.csv`、`baseline_service_metrics.csv` 与 `baseline_summary.md`。
+- `./.venv/bin/python3 analysis/validate_batch.py --batch-run-id phase2-awq-baseline-20260628T124711Z --output-dir results/batches/phase2-awq-baseline-20260628T124711Z` 已返回 `errors: []`，确认 `48` 个预期 case 全部完成、无失败。
+- 为了兼容 smoke/小样本批次与 `vllm 0.23.0` 当前这台机器上的指标表现，仓库现已修正：
+  - [analysis/aggregate_results.py](./analysis/aggregate_results.py) 会把 `num_prompts` 写入 `baseline_metrics.csv`
+  - [analysis/validate_batch.py](./analysis/validate_batch.py) 会按每个 case 的真实 `num_prompts` 校验 `completed`
+  - [scripts/run_vllm_local.sh](./scripts/run_vllm_local.sh) 默认 `VLLM_DISABLE_LOG_STATS=0`，不再默认传 `--disable-log-stats`
+  - [bench/collect_metrics.py](./bench/collect_metrics.py) 会同时兼容 `vllm:kv_cache_usage_perc` 与旧名 `vllm:gpu_cache_usage_perc`，并在当前 `/metrics` 不吐出 `vllm:` 业务指标时回退到 `http_requests_total` 与 benchmark 结果，避免服务侧 CSV 整列写成 `0`
+- 当前机器上的 AWQ 评估结论已从“具备前提”升级为“已完成实测”：硬件与运行栈层面支持 `AWQ`，并且本机本地权重目录 `/root/autodl-tmp/qwen2.5-7b-awq` 已完成一次完整 baseline 验证。
+
+## 历史记录（旧机器背景，保留供参考）
+
 ## 1. 结论先行
 
 当前仓库在这台机器上已经完成：

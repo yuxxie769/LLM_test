@@ -130,6 +130,7 @@ def run_case(
         before,
         after,
         float(benchmark_execution["normalized_result"]["duration_s"]),
+        benchmark_result=benchmark_execution["normalized_result"],
     )
     delta_path = prometheus_dir / f"{case_id}.delta.json"
     write_json(delta_path, service_delta)

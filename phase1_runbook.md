@@ -1,16 +1,20 @@
 # Phase 1 Runbook
 
-更新时间：2026-06-27
+更新时间：2026-06-28
 
-## 兼容性补充（2026-06-28）
+## 当前兼容性结论（2026-06-28）
 
-当前仓库已经额外适配了一台 `Tesla V100S 32GB (sm_70)` 机器，和原先 runbook 中的 `RTX 4080 16GB` 背景不同。新增事实如下：
+当前有效环境已经切换到一台 `NVIDIA GeForce RTX 5090 (sm_120, 32 GiB)` 机器。以这台机器为准，新增事实如下：
 
-- 运行栈已调整为：`torch 2.6.0+cu124`、`vllm 0.8.5.post1`、`transformers 4.51.3`、`tokenizers 0.21.1`。
+- 当前可用运行栈：`torch 2.11.0+cu130`、`vllm 0.23.0`、`transformers 5.12.1`、`tokenizers 0.22.2`。
+- 本次重建环境的根因有三层：旧 `.venv` 中 `flashinfer` 二进制链损坏；`torch 2.6.0+cu124 / vllm 0.8.5` 不支持当前 `sm_120`；根分区空间不足，无法直接覆盖安装新栈。
+- 当前 `.venv` 已重建完成，并保留了 `.venv.new -> .venv` 的符号链接，以兼容 `uv` 生成的不可重定位虚拟环境。
 - `scripts/run_vllm_local.sh` 现在会自动优先本机已有的 `/root/autodl-tmp/qwen2.5-0.5b`。
-- 该脚本也会检测当前 `vllm serve` 是否支持 `--offload-backend`，从而兼容旧版 `vllm`。
-- `scripts/verify_phase1_local.sh` 默认已修成 `MAX_MODEL_LEN=512` 搭配 `VLLM_MAX_NUM_BATCHED_TOKENS=512`，避免旧版 `vllm` 的参数校验报错。
-- 以这组兼容栈为准，Phase 1 已再次完成端到端验收。
+- `./scripts/verify_phase1_local.sh` 已在这套新环境上实际通过，最终输出 `phase1 verification complete`。
+- 本次 Phase 1 成功覆盖的检查项为：`vLLM /health`、`/v1/models`、`/v1/chat/completions`、`gateway /healthz`、`gateway authorized chat`、`gateway unauthorized chat should fail`。
+- 相关日志位于 `logs/vllm.stdout.log` 与 `logs/gateway.stdout.log`。
+
+下文若提到旧的 `V100S` 或 `RTX 4080` 兼容性背景，均只保留作历史上下文，不再代表当前机器的主结论。
 
 
 ## 1. Phase 1 做了什么
@@ -18,7 +22,7 @@
 本阶段已完成：
 
 1. 在 `WSL2 + Ubuntu-22.04` 下跑通本地 `vLLM`
-2. 当前默认使用本地模型目录 `/mnt/d/models/qwen2.5-0.5b` 做低显存 smoke
+2. 当前默认使用本地模型目录 `/root/autodl-tmp/qwen2.5-0.5b` 做低显存 smoke
 3. 在仓库内落地最小 `FastAPI` 网关实现
 4. 固化启动脚本、冒烟脚本、端到端验收脚本
 5. 修掉当前机器上的几类实际阻碍：
@@ -40,7 +44,7 @@
 
 ## 3. 当前默认运行参数
 
-- 模型目录：`/mnt/d/models/qwen2.5-0.5b`
+- 模型目录：默认优先 `/root/autodl-tmp/qwen2.5-0.5b`，不存在时回退 `/root/models/qwen2.5-0.5b`
 - 服务模型名：`qwen-05b-local`
 - 默认 `vLLM` 端口：`19100`
 - 默认网关端口：`18080`
@@ -60,7 +64,7 @@
 先进入仓库并激活环境：
 
 ```bash
-cd /mnt/d/LLM_test/LLM_test
+cd /GitHub/LLM_test
 source .venv/bin/activate
 ```
 

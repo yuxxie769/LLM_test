@@ -1,26 +1,37 @@
 # Phase 2 Runbook
 
-更新时间：2026-06-27
+更新时间：2026-06-28
 
-## 兼容性补充（2026-06-28）
+## 当前兼容性结论（2026-06-28）
 
-当前 `Phase 2` 已在一台 `Tesla V100S 32GB (sm_70)` 机器上补齐兼容层并重新验证。需要记录的增量结论：
+当前有效环境已经切换到一台 `NVIDIA GeForce RTX 5090 (sm_120, 32 GiB)` 机器。以这台机器为准，新增事实如下：
 
-- 本机最终可用栈为：`torch 2.6.0+cu124`、`vllm 0.8.5.post1`、`transformers 4.51.3`、`tokenizers 0.21.1`。
-- [bench/benchmark_backends/vllm_bench.py](./bench/benchmark_backends/vllm_bench.py) 已增加版本感知分支：
-  - `vllm < 0.9` 时自动改走 `openai-comp + /v1/completions + --random-input-len + --random-output-len`
-  - 新版 `vllm` 继续走仓库原本的 chat benchmark 参数
-- [bench/config.py](./bench/config.py) 已改为优先本机存在的 `/root/autodl-tmp/qwen2.5-0.5b`。
-- 当前这台 `V100S 32GB` 上的正式 `7B` baseline 启动档位已固定为：`LOW_VRAM_MODE=0`、`MODEL_DIR=/root/autodl-tmp/qwen2.5-7b`、`SERVED_MODEL_NAME=qwen-7b-local`、`MAX_MODEL_LEN=3072`、`GPU_MEMORY_UTILIZATION=0.9`、`VLLM_CPU_OFFLOAD_GB=0`、`VLLM_ENFORCE_EAGER=0`。
-- [bench/run_single_case.py](./bench/run_single_case.py) 已增加长度预算保护：如果传入 `SERVICE_MAX_MODEL_LEN` 或 `MAX_MODEL_LEN`，当 `input_tokens + output_tokens` 超出该上限时会直接 fail fast，而不是跑到中途才发现服务配置不匹配。
-- [bench/run_matrix.py](./bench/run_matrix.py) 现在支持按 `batch_run_id` 断点续跑：若结果目录里已存在对应 case 的 `.combined.json`，再次执行时会自动跳过已完成 case，并在 manifest 中记录 `skipped_existing_cases`。
-- `Qwen2.5-7B-Instruct-AWQ` 在当前 `sm_70` 机器上不是“需要进一步调优”，而是启动即报 `The quantization method awq is not supported for the current GPU. Minimum capability: 75. Current capability: 70.`，因此本机不能完成 AWQ baseline。
-- 在这组兼容修改后，`Phase 2 smoke` 已重新通过，产物包括：
-  - `results/raw/benchmark/phase2smoke-20260627T180045Z/`
-  - `results/raw/prometheus/phase2smoke-20260627T180045Z/`
-  - `results/batches/phase2smoke-20260627T180045Z/`
-- 额外还完成了一次缩小版 `baseline` 矩阵验证：`batch_run_id=phase2-baseline-limit2`，证明 `run_matrix -> aggregate -> render -> plot -> validate` 这条路径也已可用。
-- [scripts/run_phase2_suite.sh](./scripts/run_phase2_suite.sh) 已支持通过 `MATRIX_LIMIT` 运行缩小版 suite，用于当前机器上的快速验证，不影响原有全量 baseline 用法。
+- 当前可用运行栈：`torch 2.11.0+cu130`、`vllm 0.23.0`、`transformers 5.12.1`、`tokenizers 0.22.2`。
+- 旧 `.venv` 中 `flashinfer` 二进制链损坏、旧版 `torch 2.6.0+cu124 / vllm 0.8.5` 不支持 `sm_120`、以及根分区空间不足，是本次环境重建的三层根因。
+- 当前 `.venv` 已重建完成，并保留 `.venv.new -> .venv` 符号链接，以兼容 `uv` 生成的不可重定位虚拟环境。
+- [bench/config.py](./bench/config.py) 与 [scripts/run_vllm_local.sh](./scripts/run_vllm_local.sh) 当前默认都会优先使用 `/root/autodl-tmp/qwen2.5-0.5b`。
+- 已实际跑通一次默认模型 `Phase 2 smoke`：`batch_run_id=phase2smoke-20260628T111721Z`。这次产物位于：
+  - `results/raw/benchmark/phase2smoke-20260628T111721Z/`
+  - `results/raw/prometheus/phase2smoke-20260628T111721Z/`
+  - `results/batches/phase2smoke-20260628T111721Z/`
+- 为了让 smoke/小样本批次不会被误判失败：
+  - [analysis/aggregate_results.py](./analysis/aggregate_results.py) 现在会把 `num_prompts` 写入 `baseline_metrics.csv`
+  - [analysis/validate_batch.py](./analysis/validate_batch.py) 现在按每个 case 的真实 `num_prompts` 校验 `completed`，而不是把 `40` 写死
+- [scripts/verify_phase2_smoke.sh](./scripts/verify_phase2_smoke.sh) 与 [scripts/run_phase2_suite.sh](./scripts/run_phase2_suite.sh) 已补回可执行位，runbook 中的 `./scripts/...` 调用现在可直接执行。
+- [scripts/run_vllm_local.sh](./scripts/run_vllm_local.sh) 现在默认 `VLLM_DISABLE_LOG_STATS=0`，不再默认传 `--disable-log-stats`。
+- [bench/collect_metrics.py](./bench/collect_metrics.py) 已补两层兼容：
+  - `kv_cache_usage_perc` 同时支持 `vllm:kv_cache_usage_perc` 与旧名 `vllm:gpu_cache_usage_perc`
+  - 当当前 `vllm 0.23.0` 的 `/metrics` 没有吐出任何 `vllm:` 业务指标时，`request_success` 会优先回退到 `http_requests_total`，`prompt/generation/success delta` 会继续回退到 benchmark 结果，避免服务侧 CSV 被整列写成 `0`
+- AWQ 的硬件门槛已经不再是当前机器的阻塞项：本机 GPU 计算能力为 `12.0`，而当前安装的 `vllm 0.23.0` 中 `AWQConfig.get_min_capability()` 返回 `75`。
+- 本机当前已经存在本地 AWQ 权重目录：`/root/autodl-tmp/qwen2.5-7b-awq`。
+- `7B-AWQ baseline` 已实际跑完并校验通过：`batch_run_id=phase2-awq-baseline-20260628T124711Z`。
+- 本次 AWQ baseline 的关键产物位于：
+  - `results/raw/benchmark/phase2-awq-baseline-20260628T124711Z/`
+  - `results/raw/prometheus/phase2-awq-baseline-20260628T124711Z/`
+  - `results/batches/phase2-awq-baseline-20260628T124711Z/`
+- 使用 `./.venv/bin/python3 analysis/validate_batch.py --batch-run-id phase2-awq-baseline-20260628T124711Z --output-dir results/batches/phase2-awq-baseline-20260628T124711Z` 复核后，结果为 `expected_cases=48`、`completed_cases=48`、`failed_cases=0`、`errors=[]`。
+
+下文若提到旧的 `V100S` 或 `RTX 4080` 兼容性背景，均只保留作历史上下文，不再代表当前机器的主结论。
 
 
 ## 1. Phase 2 当前定位
@@ -51,7 +62,7 @@
 如果你重建了 `.venv`，先执行：
 
 ```bash
-cd /mnt/d/LLM_test/LLM_test
+cd /GitHub/LLM_test
 source .venv/bin/activate
 ./scripts/setup_phase2_deps.sh
 ```
@@ -61,7 +72,7 @@ source .venv/bin/activate
 如果你要先验证整条 `Phase 2` 链路：
 
 ```bash
-cd /mnt/d/LLM_test/LLM_test
+cd /GitHub/LLM_test
 source .venv/bin/activate
 READINESS_TIMEOUT_SECONDS=600 \
 BENCHMARK_NUM_PROMPTS=2 \
@@ -72,7 +83,7 @@ BENCHMARK_STREAM_NUM_PROMPTS=1 \
 这个 smoke 脚本现在默认会启用一组更保守的本地开发参数：
 
 - `LOW_VRAM_MODE=1`
-- `MODEL_DIR=/root/models/qwen2.5-0.5b`
+- `MODEL_DIR=/root/autodl-tmp/qwen2.5-0.5b`
 - `SERVED_MODEL_NAME=qwen-05b-local`
 - `MAX_MODEL_LEN=256`
 - `GPU_MEMORY_UTILIZATION=0.45`
@@ -82,9 +93,9 @@ BENCHMARK_STREAM_NUM_PROMPTS=1 \
 - `VLLM_MAX_NUM_SEQS=1`
 - `VLLM_MAX_NUM_BATCHED_TOKENS=256`
 
-这组默认值已在 `2026-06-27` 的本机 `RTX 4080 16GB` 环境跑通过一次完整 `Phase 2 smoke`。
-目的不是拿它做正式 baseline，而是优先提高本地直接运行成功率。
-其中 `MODEL_DIR` 默认切到 `/root/models/qwen2.5-0.5b`，是为了绕开 WSL 对 `/mnt/d/...` 的 `9P` 读盘路径；之前正式 `baseline` 启动卡住时，进程等待点就是 `p9_client_rpc`。
+这组默认值的目的不是拿来做正式 baseline，而是优先提高本地直接运行成功率。
+它已经在当前 `RTX 5090` 环境完成一次实际 smoke；更早的 `RTX 4080` / WSL / `9P` 读盘背景仅保留作历史参考。
+其中 `MODEL_DIR` 当前默认优先切到 `/root/autodl-tmp/qwen2.5-0.5b`。
 
 成功后会产出：
 
@@ -105,16 +116,16 @@ results/batches/<batch_run_id>/
 
 ## 5. 正式 baseline
 
-当前这台 `Tesla V100S 32GB` 上，如果要跑覆盖完整矩阵的正式 `7B` baseline，先单独起 `vLLM`：
+当前机器已经存在本地 `7B-AWQ` 权重目录 `/root/autodl-tmp/qwen2.5-7b-awq`。如果要直接跑覆盖完整矩阵的正式 `7B-AWQ` baseline，可以先单独起 `vLLM`：
 
 ```bash
 cd /GitHub/LLM_test
 source .venv/bin/activate
 LOW_VRAM_MODE=0 \
-MODEL_DIR=/root/autodl-tmp/qwen2.5-7b \
-SERVED_MODEL_NAME=qwen-7b-local \
+MODEL_DIR=/root/autodl-tmp/qwen2.5-7b-awq \
+SERVED_MODEL_NAME=qwen-7b-awq-local \
 MAX_MODEL_LEN=3072 \
-GPU_MEMORY_UTILIZATION=0.9 \
+GPU_MEMORY_UTILIZATION=0.85 \
 VLLM_CPU_OFFLOAD_GB=0 \
 VLLM_ENFORCE_EAGER=0 \
 ./scripts/run_vllm_local.sh
@@ -125,8 +136,8 @@ VLLM_ENFORCE_EAGER=0 \
 ```bash
 cd /GitHub/LLM_test
 source .venv/bin/activate
-MODEL_DIR=/root/autodl-tmp/qwen2.5-7b \
-SERVED_MODEL_NAME=qwen-7b-local \
+MODEL_DIR=/root/autodl-tmp/qwen2.5-7b-awq \
+SERVED_MODEL_NAME=qwen-7b-awq-local \
 VLLM_BASE_URL=http://127.0.0.1:19100 \
 SERVICE_MAX_MODEL_LEN=3072 \
 ./scripts/run_phase2_suite.sh baseline
@@ -135,8 +146,8 @@ SERVICE_MAX_MODEL_LEN=3072 \
 如果只想先跑流式子矩阵：
 
 ```bash
-MODEL_DIR=/root/autodl-tmp/qwen2.5-7b \
-SERVED_MODEL_NAME=qwen-7b-local \
+MODEL_DIR=/root/autodl-tmp/qwen2.5-7b-awq \
+SERVED_MODEL_NAME=qwen-7b-awq-local \
 VLLM_BASE_URL=http://127.0.0.1:19100 \
 SERVICE_MAX_MODEL_LEN=3072 \
 ./scripts/run_phase2_suite.sh stream_latency

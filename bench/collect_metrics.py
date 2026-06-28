@@ -81,6 +81,70 @@ def _sum_metric(
     return total
 
 
+def _has_metric(
+    samples: list[MetricSample],
+    names: tuple[str, ...],
+    predicate: Callable[[MetricSample], bool] | None = None,
+) -> bool:
+    for sample in samples:
+        if sample.name not in names:
+            continue
+        if predicate is not None and not predicate(sample):
+            continue
+        return True
+    return False
+
+
+def _sum_http_success_metric(samples: list[MetricSample]) -> float:
+    total = 0.0
+    success_statuses = {"2xx", "200", "200 OK"}
+    success_handlers = {
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/messages",
+        "/generate",
+        "/invocations",
+    }
+    for sample in samples:
+        if sample.name != "http_requests_total":
+            continue
+        if sample.labels.get("method") != "POST":
+            continue
+        if sample.labels.get("status") not in success_statuses:
+            continue
+        if sample.labels.get("handler") not in success_handlers:
+            continue
+        total += sample.value
+    return total
+
+
+def fetch_server_load(base_url: str, timeout: float = 5.0) -> float | None:
+    url = f"{base_url.rstrip('/')}/load"
+    completed = subprocess.run(
+        [
+            "curl",
+            "--noproxy",
+            "*",
+            "--max-time",
+            str(int(timeout)),
+            "-fsS",
+            url,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+    value = payload.get("server_load")
+    return None if value is None else float(value)
+
+
 def query_gpu_memory_used_mb() -> float | None:
     command = [
         "nvidia-smi",
@@ -117,50 +181,127 @@ def collect_service_metrics(base_url: str, served_model_name: str | None = None)
         model_name = sample.labels.get("model_name")
         return model_name in (None, "", served_model_name)
 
+    running_metric_names = ("vllm:num_requests_running",)
+    waiting_metric_names = ("vllm:num_requests_waiting",)
+    kv_metric_names = ("vllm:kv_cache_usage_perc", "vllm:gpu_cache_usage_perc")
+    prompt_metric_names = ("vllm:prompt_tokens_total", "vllm:prompt_tokens")
+    generation_metric_names = ("vllm:generation_tokens_total", "vllm:generation_tokens")
+    request_success_metric_names = ("vllm:request_success_total", "vllm:request_success")
+
+    has_running_metric = _has_metric(samples, running_metric_names, predicate)
+    has_waiting_metric = _has_metric(samples, waiting_metric_names, predicate)
+    has_kv_metric = _has_metric(samples, kv_metric_names, predicate)
+    has_prompt_metric = _has_metric(samples, prompt_metric_names, predicate)
+    has_generation_metric = _has_metric(samples, generation_metric_names, predicate)
+    has_request_success_metric = _has_metric(
+        samples, request_success_metric_names, predicate
+    )
+
+    vllm_metric_names = sorted({
+        sample.name for sample in samples if sample.name.startswith("vllm:")
+    })
+    http_request_success_total = _sum_http_success_metric(samples)
+
     snapshot = {
         "collected_at": datetime.now(timezone.utc).isoformat(),
         "base_url": base_url,
         "served_model_name": served_model_name,
-        "num_requests_running": _sum_metric(
-            samples, ("vllm:num_requests_running",), predicate
-        ),
-        "num_requests_waiting": _sum_metric(
-            samples, ("vllm:num_requests_waiting",), predicate
-        ),
-        "kv_cache_usage_perc": _sum_metric(
-            samples, ("vllm:kv_cache_usage_perc",), predicate
-        ),
-        "prompt_tokens_total": _sum_metric(
-            samples, ("vllm:prompt_tokens_total", "vllm:prompt_tokens"), predicate
-        ),
+        "vllm_metric_names": vllm_metric_names,
+        "has_vllm_running_metric": has_running_metric,
+        "has_vllm_waiting_metric": has_waiting_metric,
+        "has_vllm_kv_metric": has_kv_metric,
+        "has_vllm_prompt_metric": has_prompt_metric,
+        "has_vllm_generation_metric": has_generation_metric,
+        "has_vllm_request_success_metric": has_request_success_metric,
+        "num_requests_running": _sum_metric(samples, running_metric_names, predicate)
+        if has_running_metric
+        else None,
+        "num_requests_waiting": _sum_metric(samples, waiting_metric_names, predicate)
+        if has_waiting_metric
+        else None,
+        "kv_cache_usage_perc": _sum_metric(samples, kv_metric_names, predicate)
+        if has_kv_metric
+        else None,
+        "prompt_tokens_total": _sum_metric(samples, prompt_metric_names, predicate)
+        if has_prompt_metric
+        else None,
         "generation_tokens_total": _sum_metric(
-            samples,
-            ("vllm:generation_tokens_total", "vllm:generation_tokens"),
-            predicate,
-        ),
+            samples, generation_metric_names, predicate
+        )
+        if has_generation_metric
+        else None,
+        "http_request_success_total": http_request_success_total,
         "request_success_total": _sum_metric(
-            samples, ("vllm:request_success_total", "vllm:request_success"), predicate
-        ),
+            samples, request_success_metric_names, predicate
+        )
+        if has_request_success_metric
+        else http_request_success_total,
+        "request_success_source": "vllm" if has_request_success_metric else "http_requests_total",
+        "server_load": fetch_server_load(base_url),
         "gpu_memory_used_mb": query_gpu_memory_used_mb(),
         "raw_sample_count": len(samples),
     }
     return snapshot
 
 
-def derive_service_delta(before: dict, after: dict, duration_s: float) -> dict:
+def derive_service_delta(
+    before: dict,
+    after: dict,
+    duration_s: float,
+    benchmark_result: dict | None = None,
+) -> dict:
     duration_s = max(duration_s, 1e-9)
-    prompt_delta = max(
-        0.0, float(after["prompt_tokens_total"]) - float(before["prompt_tokens_total"])
+
+    def delta_or_none(before_value, after_value) -> float | None:
+        if before_value is None or after_value is None:
+            return None
+        return max(0.0, float(after_value) - float(before_value))
+
+    vllm_metrics_absent = not before.get("vllm_metric_names") and not after.get(
+        "vllm_metric_names"
     )
-    generation_delta = max(
-        0.0,
-        float(after["generation_tokens_total"])
-        - float(before["generation_tokens_total"]),
+
+    prompt_delta = delta_or_none(
+        before.get("prompt_tokens_total"), after.get("prompt_tokens_total")
     )
-    success_delta = max(
-        0.0,
-        float(after["request_success_total"]) - float(before["request_success_total"]),
+    if vllm_metrics_absent:
+        prompt_delta = None
+    prompt_source = "vllm"
+    if prompt_delta is None and benchmark_result is not None:
+        prompt_delta = float(benchmark_result.get("total_input_tokens", 0.0))
+        prompt_source = "benchmark_result"
+    elif prompt_delta is None:
+        prompt_delta = 0.0
+        prompt_source = "unavailable"
+
+    generation_delta = delta_or_none(
+        before.get("generation_tokens_total"), after.get("generation_tokens_total")
     )
+    if vllm_metrics_absent:
+        generation_delta = None
+    generation_source = "vllm"
+    if generation_delta is None and benchmark_result is not None:
+        generation_delta = float(benchmark_result.get("total_output_tokens", 0.0))
+        generation_source = "benchmark_result"
+    elif generation_delta is None:
+        generation_delta = 0.0
+        generation_source = "unavailable"
+
+    success_delta = delta_or_none(
+        before.get("request_success_total"), after.get("request_success_total")
+    )
+    if vllm_metrics_absent and (after.get("request_success_source") != "http_requests_total"):
+        success_delta = None
+    success_source = after.get("request_success_source") or before.get(
+        "request_success_source", "vllm"
+    )
+    if success_delta is None and benchmark_result is not None:
+        success_delta = float(benchmark_result.get("completed", 0.0))
+        success_source = "benchmark_result"
+    elif success_delta is None:
+        success_delta = 0.0
+        success_source = "unavailable"
+
     gpu_before = before.get("gpu_memory_used_mb")
     gpu_after = after.get("gpu_memory_used_mb")
     gpu_delta = (
@@ -176,15 +317,22 @@ def derive_service_delta(before: dict, after: dict, duration_s: float) -> dict:
         "request_success_delta": success_delta,
         "prompt_throughput_toks_per_s": prompt_delta / duration_s,
         "generation_throughput_toks_per_s": generation_delta / duration_s,
-        "kv_cache_usage_perc_before": before["kv_cache_usage_perc"],
-        "kv_cache_usage_perc_after": after["kv_cache_usage_perc"],
-        "num_requests_running_before": before["num_requests_running"],
-        "num_requests_running_after": after["num_requests_running"],
-        "num_requests_waiting_before": before["num_requests_waiting"],
-        "num_requests_waiting_after": after["num_requests_waiting"],
+        "prompt_tokens_source": prompt_source,
+        "generation_tokens_source": generation_source,
+        "request_success_source": success_source,
+        "kv_cache_usage_perc_before": None if vllm_metrics_absent else before.get("kv_cache_usage_perc"),
+        "kv_cache_usage_perc_after": None if vllm_metrics_absent else after.get("kv_cache_usage_perc"),
+        "num_requests_running_before": None if vllm_metrics_absent else before.get("num_requests_running"),
+        "num_requests_running_after": None if vllm_metrics_absent else after.get("num_requests_running"),
+        "num_requests_waiting_before": None if vllm_metrics_absent else before.get("num_requests_waiting"),
+        "num_requests_waiting_after": None if vllm_metrics_absent else after.get("num_requests_waiting"),
+        "server_load_before": before.get("server_load"),
+        "server_load_after": after.get("server_load"),
         "gpu_memory_used_mb_before": gpu_before,
         "gpu_memory_used_mb_after": gpu_after,
         "gpu_memory_used_mb_delta": gpu_delta,
+        "vllm_metric_names_before": before.get("vllm_metric_names", []),
+        "vllm_metric_names_after": after.get("vllm_metric_names", []),
     }
 
 

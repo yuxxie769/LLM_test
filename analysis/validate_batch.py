@@ -25,6 +25,25 @@ def load_csv_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def expected_completed_requests_for_row(
+    *,
+    row: dict[str, str],
+    combined_path: Path | None,
+    settings,
+) -> int:
+    num_prompts = row.get("num_prompts")
+    if num_prompts not in (None, ""):
+        return int(float(num_prompts))
+
+    if combined_path and combined_path.exists():
+        payload = json.loads(combined_path.read_text(encoding="utf-8"))
+        case_num_prompts = payload.get("case", {}).get("num_prompts")
+        if case_num_prompts is not None:
+            return int(case_num_prompts)
+
+    return settings.benchmark_num_prompts
+
+
 def expected_cases_from_matrix(
     *,
     repo_root: Path,
@@ -97,6 +116,9 @@ def validate_batch(
 
     benchmark_rows = load_csv_rows(benchmark_csv)
     service_rows = load_csv_rows(service_csv)
+    combined_by_case_id = {
+        path.name.removesuffix(".combined.json"): path for path in combined_files
+    }
 
     errors: list[str] = []
 
@@ -116,14 +138,23 @@ def validate_batch(
         errors.append("benchmark csv row count does not match combined json count")
     if len(service_rows) != len(combined_files):
         errors.append("service csv row count does not match combined json count")
-    incomplete_rows = [
-        row["case_id"]
-        for row in benchmark_rows
-        if float(row.get("completed", "0") or 0) < 40 and float(row.get("failed", "0") or 0) == 0
-    ]
+    incomplete_rows = []
+    for row in benchmark_rows:
+        expected_completed = expected_completed_requests_for_row(
+            row=row,
+            combined_path=combined_by_case_id.get(row["case_id"]),
+            settings=settings,
+        )
+        completed = float(row.get("completed", "0") or 0)
+        failed = float(row.get("failed", "0") or 0)
+        if completed < expected_completed and failed == 0:
+            incomplete_rows.append(
+                f"{row['case_id']} ({int(completed)}/{expected_completed})"
+            )
     if incomplete_rows:
         errors.append(
-            "benchmark rows with completed < 40 despite zero failures: " + ", ".join(incomplete_rows)
+            "benchmark rows with completed below expected prompt count despite zero failures: "
+            + ", ".join(incomplete_rows)
         )
     if not summary_md.exists():
         errors.append("baseline_summary.md is missing")
