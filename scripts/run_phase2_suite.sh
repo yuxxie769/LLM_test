@@ -23,7 +23,12 @@ echo "[phase2-suite] checking vLLM health"
 curl --noproxy "*" -fsS "${VLLM_BASE_URL:-http://127.0.0.1:19100}/health" >/dev/null
 
 echo "[phase2-suite] running matrix"
-python bench/run_matrix.py --suite "${SUITE}" --batch-run-id "${BATCH_RUN_ID}"
+if [[ -n "${MATRIX_LIMIT:-}" ]]; then
+  echo "[phase2-suite] matrix_limit=${MATRIX_LIMIT}"
+  python bench/run_matrix.py --suite "${SUITE}" --limit "${MATRIX_LIMIT}" --batch-run-id "${BATCH_RUN_ID}"
+else
+  python bench/run_matrix.py --suite "${SUITE}" --batch-run-id "${BATCH_RUN_ID}"
+fi
 
 echo "[phase2-suite] aggregating"
 python analysis/aggregate_results.py --batch-run-id "${BATCH_RUN_ID}" --output-dir "${OUTPUT_DIR}"

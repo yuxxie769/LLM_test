@@ -37,6 +37,19 @@ Phase 0 → Phase 1 → Phase 2 → Phase 4 → Phase 3
 - `Phase 4` 只需切换模型重跑，更容易先产出结果
 - `Phase 3` 需要基于 baseline 和模型选择做参数 sweep，放最后最稳
 
+## 当前机器兼容性补记
+
+原始计划按“24GB+ GPU 即可完成 `FP16/BF16 vs AWQ-INT4` 对比”来写，但当前实际落地机器是 `Tesla V100S 32GB`，计算能力只有 `sm_70`。这会带来两类必须前置记录的兼容性约束：
+
+- 当前机器不能继续使用原先尝试过的 `torch 2.11.0+cu130`，否则会报 `CUDA error: no kernel image is available for execution on the device`；本仓库现已切到 `torch 2.6.0+cu124 + vllm 0.8.5.post1`。
+- `Qwen2.5-7B-Instruct-AWQ` 在这台机器上不是“性能较差”或“需要调参”，而是硬件能力不满足。实际报错是：`The quantization method awq is not supported for the current GPU. Minimum capability: 75. Current capability: 70.`，因此本机不能完成 `AWQ` 基线与 Phase 4 的本地对比。
+- 当前机器可以稳定运行非量化 `Qwen2.5-7B-Instruct`，并已据此继续推进 `Phase 1/2` 的本地部署与 baseline 压测。
+
+因此，后续解释计划产出时要区分两层结论：
+
+- `Phase 1/2` 的本地链路验证、baseline 指标采集、脚本兼容性适配，已经可以在这台 `V100S 32GB` 上完成。
+- `Phase 4` 的 `FP16/BF16 vs AWQ-INT4` 正式对比，仍需要切回 `sm_75+` 的 GPU，或者更换为支持 AWQ 的机器执行。
+
 ---
 
 ## 前置条件

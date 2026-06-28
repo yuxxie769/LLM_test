@@ -2,6 +2,26 @@
 
 更新时间：2026-06-27
 
+## 兼容性补充（2026-06-28）
+
+在当前 `Tesla V100S 32GB` 机器上，`Phase 2` 的主要兼容性问题不是链路设计，而是 `vllm bench serve` 的 CLI 代际差异。当前已确认：
+
+- 仓库原始实现按较新的 `vllm bench serve` 参数构造命令：`--backend`、`--input-len`、`--output-len`、`--num-warmups`、`--temperature`。
+- 本机实际可用的 `vllm 0.8.5.post1` 只支持旧参数集：
+  - `--endpoint-type openai-comp`
+  - `--random-input-len`
+  - `--random-output-len`
+  - endpoint 也必须走 `/v1/completions`
+- 因此 [bench/benchmark_backends/vllm_bench.py](./bench/benchmark_backends/vllm_bench.py) 已增加版本感知兼容层：
+  - `vllm < 0.9` 时自动切旧 CLI
+  - 新版 `vllm` 仍保留原命令路径
+- 同时 [bench/config.py](./bench/config.py) 已改为优先使用本机存在的 `/root/autodl-tmp/qwen2.5-0.5b`，避免 `run_matrix.py` 回落到失效的 `/root/models/...` 默认值。
+- 当前这台 `V100S 32GB` 上，如果要覆盖 `baseline` 矩阵里的 `input=2048, output=512` 组合，服务侧 `MAX_MODEL_LEN` 不能再停在 `2048`。当前正式 `7B` baseline 已改用 `MAX_MODEL_LEN=3072`、`GPU_MEMORY_UTILIZATION=0.9` 的正常档位。
+- [bench/run_single_case.py](./bench/run_single_case.py) 已增加长度预算保护：传入 `SERVICE_MAX_MODEL_LEN` 或 `MAX_MODEL_LEN` 时，若 `input_tokens + output_tokens` 超过该预算会直接报错，避免跑半天才发现服务配置覆盖不了矩阵。
+- [bench/run_matrix.py](./bench/run_matrix.py) 现在支持按 `batch_run_id` 断点续跑：若结果目录里已存在对应 case 的 `.combined.json`，再次执行时会自动跳过已完成 case，并在 manifest 中记录 `skipped_existing_cases`。
+- `Qwen2.5-7B-Instruct-AWQ` 在当前 `sm_70` 机器上已确认是硬件不支持，而不是显存调优问题。真实报错是：`The quantization method awq is not supported for the current GPU. Minimum capability: 75. Current capability: 70.`
+
+
 ## 1. 目标
 
 本文件用于把 [experience1_implementation_plan_v2.md](./experience1_implementation_plan_v2.md) 中的 `Phase 2` 从方向性目标收敛成可直接开发的执行文档。
@@ -42,11 +62,12 @@
 
 当前默认运行基线：
 
-- 模型目录：`/mnt/d/models/qwen2.5-7b-awq`
-- 模型名：`qwen-7b-awq-local`
+- 正式 `Phase 2 baseline`：`/root/autodl-tmp/qwen2.5-7b`
+- 模型名：`qwen-7b-local`
 - `vLLM`：`127.0.0.1:19100`
 - `gateway`：`127.0.0.1:18080`
-- `gpu_memory_utilization=0.8`
+- 正常档位：`MAX_MODEL_LEN=3072`、`gpu_memory_utilization=0.9`
+- `Qwen2.5-7B-Instruct-AWQ` 仍保留为目标对比模型，但在当前 `sm_70` 机器上不可运行
 
 ### 2.2 当前缺口
 

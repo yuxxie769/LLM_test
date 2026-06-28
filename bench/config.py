@@ -5,6 +5,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _default_model_dir() -> Path:
+    autodl = Path("/root/autodl-tmp/qwen2.5-0.5b")
+    if autodl.is_dir():
+        return autodl
+    return Path("/root/models/qwen2.5-0.5b")
+
+
 @dataclass(frozen=True)
 class Settings:
     repo_root: Path
@@ -42,7 +49,7 @@ def load_settings() -> Settings:
         repo_root=repo_root,
         venv_python=repo_root / ".venv" / "bin" / "python3",
         model_dir=Path(
-            os.environ.get("MODEL_DIR", "/root/models/qwen2.5-0.5b")
+            os.environ.get("MODEL_DIR", str(_default_model_dir()))
         ),
         served_model_name=os.environ.get(
             "SERVED_MODEL_NAME", "qwen-05b-local"

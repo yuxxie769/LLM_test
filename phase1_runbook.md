@@ -2,6 +2,17 @@
 
 更新时间：2026-06-27
 
+## 兼容性补充（2026-06-28）
+
+当前仓库已经额外适配了一台 `Tesla V100S 32GB (sm_70)` 机器，和原先 runbook 中的 `RTX 4080 16GB` 背景不同。新增事实如下：
+
+- 运行栈已调整为：`torch 2.6.0+cu124`、`vllm 0.8.5.post1`、`transformers 4.51.3`、`tokenizers 0.21.1`。
+- `scripts/run_vllm_local.sh` 现在会自动优先本机已有的 `/root/autodl-tmp/qwen2.5-0.5b`。
+- 该脚本也会检测当前 `vllm serve` 是否支持 `--offload-backend`，从而兼容旧版 `vllm`。
+- `scripts/verify_phase1_local.sh` 默认已修成 `MAX_MODEL_LEN=512` 搭配 `VLLM_MAX_NUM_BATCHED_TOKENS=512`，避免旧版 `vllm` 的参数校验报错。
+- 以这组兼容栈为准，Phase 1 已再次完成端到端验收。
+
+
 ## 1. Phase 1 做了什么
 
 本阶段已完成：

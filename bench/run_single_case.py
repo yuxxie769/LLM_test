@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -83,6 +84,18 @@ def run_case(
     settings=None,
 ) -> dict[str, Any]:
     settings = settings or load_settings()
+
+    # Fail fast when the benchmark matrix exceeds the configured service length budget.
+    service_max_model_len = os.environ.get("SERVICE_MAX_MODEL_LEN") or os.environ.get("MAX_MODEL_LEN")
+    if service_max_model_len:
+        max_len = int(service_max_model_len)
+        requested_total_tokens = case.input_tokens + case.output_tokens
+        if requested_total_tokens > max_len:
+            raise ValueError(
+                "benchmark case exceeds configured model length budget: "
+                f"input_tokens({case.input_tokens}) + output_tokens({case.output_tokens}) "
+                f"> max_model_len({max_len})"
+            )
     benchmark_dir = settings.raw_benchmark_dir / batch_run_id
     prometheus_dir = settings.raw_prometheus_dir / batch_run_id
     benchmark_dir.mkdir(parents=True, exist_ok=True)

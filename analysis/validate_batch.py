@@ -116,6 +116,15 @@ def validate_batch(
         errors.append("benchmark csv row count does not match combined json count")
     if len(service_rows) != len(combined_files):
         errors.append("service csv row count does not match combined json count")
+    incomplete_rows = [
+        row["case_id"]
+        for row in benchmark_rows
+        if float(row.get("completed", "0") or 0) < 40 and float(row.get("failed", "0") or 0) == 0
+    ]
+    if incomplete_rows:
+        errors.append(
+            "benchmark rows with completed < 40 despite zero failures: " + ", ".join(incomplete_rows)
+        )
     if not summary_md.exists():
         errors.append("baseline_summary.md is missing")
     if resolved_expected_cases is not None and resolved_expected_cases != len(combined_files):

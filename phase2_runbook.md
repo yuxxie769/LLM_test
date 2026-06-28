@@ -2,6 +2,27 @@
 
 更新时间：2026-06-27
 
+## 兼容性补充（2026-06-28）
+
+当前 `Phase 2` 已在一台 `Tesla V100S 32GB (sm_70)` 机器上补齐兼容层并重新验证。需要记录的增量结论：
+
+- 本机最终可用栈为：`torch 2.6.0+cu124`、`vllm 0.8.5.post1`、`transformers 4.51.3`、`tokenizers 0.21.1`。
+- [bench/benchmark_backends/vllm_bench.py](./bench/benchmark_backends/vllm_bench.py) 已增加版本感知分支：
+  - `vllm < 0.9` 时自动改走 `openai-comp + /v1/completions + --random-input-len + --random-output-len`
+  - 新版 `vllm` 继续走仓库原本的 chat benchmark 参数
+- [bench/config.py](./bench/config.py) 已改为优先本机存在的 `/root/autodl-tmp/qwen2.5-0.5b`。
+- 当前这台 `V100S 32GB` 上的正式 `7B` baseline 启动档位已固定为：`LOW_VRAM_MODE=0`、`MODEL_DIR=/root/autodl-tmp/qwen2.5-7b`、`SERVED_MODEL_NAME=qwen-7b-local`、`MAX_MODEL_LEN=3072`、`GPU_MEMORY_UTILIZATION=0.9`、`VLLM_CPU_OFFLOAD_GB=0`、`VLLM_ENFORCE_EAGER=0`。
+- [bench/run_single_case.py](./bench/run_single_case.py) 已增加长度预算保护：如果传入 `SERVICE_MAX_MODEL_LEN` 或 `MAX_MODEL_LEN`，当 `input_tokens + output_tokens` 超出该上限时会直接 fail fast，而不是跑到中途才发现服务配置不匹配。
+- [bench/run_matrix.py](./bench/run_matrix.py) 现在支持按 `batch_run_id` 断点续跑：若结果目录里已存在对应 case 的 `.combined.json`，再次执行时会自动跳过已完成 case，并在 manifest 中记录 `skipped_existing_cases`。
+- `Qwen2.5-7B-Instruct-AWQ` 在当前 `sm_70` 机器上不是“需要进一步调优”，而是启动即报 `The quantization method awq is not supported for the current GPU. Minimum capability: 75. Current capability: 70.`，因此本机不能完成 AWQ baseline。
+- 在这组兼容修改后，`Phase 2 smoke` 已重新通过，产物包括：
+  - `results/raw/benchmark/phase2smoke-20260627T180045Z/`
+  - `results/raw/prometheus/phase2smoke-20260627T180045Z/`
+  - `results/batches/phase2smoke-20260627T180045Z/`
+- 额外还完成了一次缩小版 `baseline` 矩阵验证：`batch_run_id=phase2-baseline-limit2`，证明 `run_matrix -> aggregate -> render -> plot -> validate` 这条路径也已可用。
+- [scripts/run_phase2_suite.sh](./scripts/run_phase2_suite.sh) 已支持通过 `MATRIX_LIMIT` 运行缩小版 suite，用于当前机器上的快速验证，不影响原有全量 baseline 用法。
+
+
 ## 1. Phase 2 当前定位
 
 本阶段不再走“自写 benchmark 框架”路线，而是：
@@ -84,36 +105,44 @@ results/batches/<batch_run_id>/
 
 ## 5. 正式 baseline
 
-先单独起 `vLLM`：
+当前这台 `Tesla V100S 32GB` 上，如果要跑覆盖完整矩阵的正式 `7B` baseline，先单独起 `vLLM`：
 
 ```bash
-cd /mnt/d/LLM_test/LLM_test
+cd /GitHub/LLM_test
 source .venv/bin/activate
-LOW_VRAM_MODE=1 \
-MODEL_DIR=/root/models/qwen2.5-0.5b \
-SERVED_MODEL_NAME=qwen-05b-local \
-MAX_MODEL_LEN=256 \
-GPU_MEMORY_UTILIZATION=0.45 \
-VLLM_ENFORCE_EAGER=1 \
-VLLM_CPU_OFFLOAD_GB=4 \
-VLLM_MAX_NUM_SEQS=1 \
-VLLM_MAX_NUM_BATCHED_TOKENS=256 \
+LOW_VRAM_MODE=0 \
+MODEL_DIR=/root/autodl-tmp/qwen2.5-7b \
+SERVED_MODEL_NAME=qwen-7b-local \
+MAX_MODEL_LEN=3072 \
+GPU_MEMORY_UTILIZATION=0.9 \
+VLLM_CPU_OFFLOAD_GB=0 \
+VLLM_ENFORCE_EAGER=0 \
 ./scripts/run_vllm_local.sh
 ```
 
 另一个 shell 跑 baseline：
 
 ```bash
-cd /mnt/d/LLM_test/LLM_test
+cd /GitHub/LLM_test
 source .venv/bin/activate
-VLLM_BASE_URL=http://127.0.0.1:19100 ./scripts/run_phase2_suite.sh baseline
+MODEL_DIR=/root/autodl-tmp/qwen2.5-7b \
+SERVED_MODEL_NAME=qwen-7b-local \
+VLLM_BASE_URL=http://127.0.0.1:19100 \
+SERVICE_MAX_MODEL_LEN=3072 \
+./scripts/run_phase2_suite.sh baseline
 ```
 
 如果只想先跑流式子矩阵：
 
 ```bash
-VLLM_BASE_URL=http://127.0.0.1:19100 ./scripts/run_phase2_suite.sh stream_latency
+MODEL_DIR=/root/autodl-tmp/qwen2.5-7b \
+SERVED_MODEL_NAME=qwen-7b-local \
+VLLM_BASE_URL=http://127.0.0.1:19100 \
+SERVICE_MAX_MODEL_LEN=3072 \
+./scripts/run_phase2_suite.sh stream_latency
 ```
+
+低显存 `0.5B` 档位仍然保留，但它现在只用于 smoke 或链路排障，不再作为这台机器的正式 baseline 示例。
 
 如果你要恢复到更接近原始 baseline 的启动档位，不走当前保守默认值，可以显式覆盖：
 

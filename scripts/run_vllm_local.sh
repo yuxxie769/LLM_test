@@ -24,6 +24,12 @@ if ! command -v vllm >/dev/null 2>&1; then
   exit 1
 fi
 
+VLLM_SERVE_HELP="$(vllm serve --help 2>/dev/null || true)"
+VLLM_SUPPORTS_OFFLOAD_BACKEND=0
+if printf '%s' "${VLLM_SERVE_HELP}" | rg -q -- '--offload-backend'; then
+  VLLM_SUPPORTS_OFFLOAD_BACKEND=1
+fi
+
 export PATH=/usr/lib/wsl/lib:${PATH}
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
@@ -47,11 +53,15 @@ HAS_VLLM_CPU_OFFLOAD_GB="${VLLM_CPU_OFFLOAD_GB+1}"
 HAS_VLLM_MAX_NUM_SEQS="${VLLM_MAX_NUM_SEQS+1}"
 HAS_VLLM_MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS+1}"
 
-MODEL_DIR="${MODEL_DIR:-/root/models/qwen2.5-0.5b}"
+DEFAULT_MODEL_DIR="/root/models/qwen2.5-0.5b"
+if [[ -d "/root/autodl-tmp/qwen2.5-0.5b" ]]; then
+  DEFAULT_MODEL_DIR="/root/autodl-tmp/qwen2.5-0.5b"
+fi
+MODEL_DIR="${MODEL_DIR:-${DEFAULT_MODEL_DIR}}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-qwen-05b-local}"
 VLLM_HOST="${VLLM_HOST:-0.0.0.0}"
 VLLM_PORT="${VLLM_PORT:-19100}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-2048}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-3072}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.8}"
 DTYPE="${DTYPE:-half}"
 VLLM_ENFORCE_EAGER="${VLLM_ENFORCE_EAGER:-0}"
@@ -136,7 +146,9 @@ if [[ "${VLLM_DISABLE_LOG_STATS}" == "1" ]]; then
 fi
 
 if [[ "${VLLM_CPU_OFFLOAD_GB}" != "0" ]]; then
-  COMMAND+=(--offload-backend "${VLLM_OFFLOAD_BACKEND}")
+  if [[ "${VLLM_SUPPORTS_OFFLOAD_BACKEND}" == "1" ]]; then
+    COMMAND+=(--offload-backend "${VLLM_OFFLOAD_BACKEND}")
+  fi
   COMMAND+=(--cpu-offload-gb "${VLLM_CPU_OFFLOAD_GB}")
 fi
 

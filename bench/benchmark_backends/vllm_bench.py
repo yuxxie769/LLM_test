@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,23 @@ class BenchmarkCase:
         )
 
 
+def _parse_version_tuple(version: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for token in version.replace(".post", ".").split("."):
+        if not token.isdigit():
+            break
+        parts.append(int(token))
+    return tuple(parts)
+
+
+def _is_legacy_bench_cli() -> bool:
+    try:
+        version = metadata.version("vllm")
+    except metadata.PackageNotFoundError:
+        return False
+    return _parse_version_tuple(version) < (0, 9)
+
+
 def build_vllm_bench_command(
     *,
     settings: Settings,
@@ -58,14 +76,12 @@ def build_vllm_bench_command(
         "vllm.entrypoints.cli.main",
         "bench",
         "serve",
-        "--backend",
-        settings.benchmark_backend,
         "--host",
         settings.vllm_host,
         "--port",
         str(settings.vllm_port),
         "--endpoint",
-        settings.vllm_endpoint,
+        "/v1/completions" if _is_legacy_bench_cli() else settings.vllm_endpoint,
         "--model",
         str(settings.model_dir),
         "--served-model-name",
@@ -76,20 +92,12 @@ def build_vllm_bench_command(
         settings.tokenizer_mode,
         "--dataset-name",
         "random",
-        "--input-len",
-        str(case.input_tokens),
-        "--output-len",
-        str(case.output_tokens),
         "--num-prompts",
         str(num_prompts),
-        "--num-warmups",
-        str(settings.benchmark_warmups),
         "--seed",
         str(settings.benchmark_seed),
         "--max-concurrency",
         str(case.concurrency),
-        "--temperature",
-        str(case.temperature),
         "--save-result",
         "--result-dir",
         str(result_dir),
@@ -100,6 +108,33 @@ def build_vllm_bench_command(
         "--metric-percentiles",
         "50,95,99",
     ]
+
+    if _is_legacy_bench_cli():
+        command.extend(
+            [
+                "--endpoint-type",
+                "openai-comp",
+                "--random-input-len",
+                str(case.input_tokens),
+                "--random-output-len",
+                str(case.output_tokens),
+            ]
+        )
+    else:
+        command.extend(
+            [
+                "--backend",
+                settings.benchmark_backend,
+                "--input-len",
+                str(case.input_tokens),
+                "--output-len",
+                str(case.output_tokens),
+                "--num-warmups",
+                str(settings.benchmark_warmups),
+                "--temperature",
+                str(case.temperature),
+            ]
+        )
 
     if request_rate != float("inf"):
         command.extend(["--request-rate", str(request_rate)])
@@ -118,13 +153,35 @@ def _normalize_percentiles(items: list[list[float]] | list[tuple[float, float]])
     return normalized
 
 
+def _normalize_percentiles_with_fallback(raw: dict[str, Any], prefix: str) -> dict[str, float]:
+    normalized = _normalize_percentiles(raw.get(f"percentiles_{prefix}_ms", []))
+    if normalized:
+        return normalized
+
+    fallback: dict[str, float] = {}
+    for percentile in (50, 95, 99):
+        value = raw.get(f"p{percentile}_{prefix}_ms")
+        if value is not None:
+            fallback[f"p{percentile}"] = float(value)
+    return fallback
+
+
+def _normalize_completed(raw: dict[str, Any]) -> int:
+    completed = int(raw.get("completed", 0) or 0)
+    generated_texts = raw.get("generated_texts", []) or []
+    errors = raw.get("errors", []) or []
+    empty_error_count = sum(1 for error in errors if not str(error).strip())
+    inferred_completed = max(len(generated_texts), empty_error_count)
+    return max(completed, inferred_completed)
+
+
 def normalize_benchmark_result(raw: dict[str, Any]) -> dict[str, Any]:
     return {
         "duration_s": float(raw.get("duration", 0.0)),
-        "completed": int(raw.get("completed", 0)),
-        "failed": int(raw.get("failed", 0)),
-        "total_input_tokens": int(raw.get("total_input", 0)),
-        "total_output_tokens": int(raw.get("total_output", 0)),
+        "completed": _normalize_completed(raw),
+        "failed": int(raw.get("failed", 0) or 0),
+        "total_input_tokens": int(raw.get("total_input_tokens", raw.get("total_input", 0)) or 0),
+        "total_output_tokens": int(raw.get("total_output_tokens", raw.get("total_output", 0)) or 0),
         "request_throughput_qps": float(raw.get("request_throughput", 0.0)),
         "output_throughput_tps": float(raw.get("output_throughput", 0.0)),
         "total_token_throughput_tps": float(raw.get("total_token_throughput", 0.0)),
@@ -136,18 +193,10 @@ def normalize_benchmark_result(raw: dict[str, Any]) -> dict[str, Any]:
         "median_itl_ms": float(raw.get("median_itl_ms", 0.0)),
         "mean_e2el_ms": float(raw.get("mean_e2el_ms", 0.0)),
         "median_e2el_ms": float(raw.get("median_e2el_ms", 0.0)),
-        "ttft_percentiles_ms": _normalize_percentiles(
-            raw.get("percentiles_ttft_ms", [])
-        ),
-        "tpot_percentiles_ms": _normalize_percentiles(
-            raw.get("percentiles_tpot_ms", [])
-        ),
-        "itl_percentiles_ms": _normalize_percentiles(
-            raw.get("percentiles_itl_ms", [])
-        ),
-        "e2el_percentiles_ms": _normalize_percentiles(
-            raw.get("percentiles_e2el_ms", [])
-        ),
+        "ttft_percentiles_ms": _normalize_percentiles_with_fallback(raw, "ttft"),
+        "tpot_percentiles_ms": _normalize_percentiles_with_fallback(raw, "tpot"),
+        "itl_percentiles_ms": _normalize_percentiles_with_fallback(raw, "itl"),
+        "e2el_percentiles_ms": _normalize_percentiles_with_fallback(raw, "e2el"),
     }
 
 

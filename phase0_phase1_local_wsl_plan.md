@@ -2,6 +2,24 @@
 
 更新时间：2026-06-27
 
+## 兼容性补充（2026-06-28）
+
+新增一组必须记录的本机兼容性结论：
+
+- 当前实际部署机器不是 `RTX 4080 16GB`，而是 `Tesla V100S 32GB`，计算能力为 `sm_70`。
+- 这张卡无法运行本仓库先前假设的 `torch 2.11.0+cu130 + vllm 0.23.0` 组合；最小 `torch.zeros(..., device="cuda")` 就会报 `CUDA error: no kernel image is available for execution on the device`。
+- 为了在这台机器上跑通环境，运行栈已切换为：
+  - `torch 2.6.0+cu124`
+  - `vllm 0.8.5.post1`
+  - `transformers 4.51.3`
+  - `tokenizers 0.21.1`
+- 因为 `vllm 0.8.5` 的 CLI 明显早于当前仓库脚本假设：
+  - `vllm serve` 不接受 `--offload-backend auto`
+  - `vllm bench serve` 不接受 `--backend / --input-len / --output-len / --num-warmups / --temperature`
+  - 旧版 `bench serve` 只能走 `openai-comp + /v1/completions + --random-input-len + --random-output-len`
+- 因此仓库内已补一层版本兼容适配，确保 `Phase 1` 与 `Phase 2` 都能在 `sm_70` + 旧版 `vLLM` 组合上继续工作。
+
+
 ## 1. 结论先行
 
 本地 Phase 0 + Phase 1 的最终决策如下：

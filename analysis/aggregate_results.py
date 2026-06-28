@@ -9,6 +9,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from bench.benchmark_backends.vllm_bench import normalize_benchmark_result
 from bench.config import load_settings
 
 
@@ -41,6 +42,10 @@ def write_csv(path: Path, rows: list[dict]) -> None:
 def flatten_benchmark_row(payload: dict) -> dict:
     case = payload["case"]
     benchmark = payload["benchmark"]
+    benchmark_result_path = payload.get("benchmark_result_path")
+    if benchmark_result_path:
+        raw_payload = json.loads(Path(benchmark_result_path).read_text(encoding="utf-8"))
+        benchmark = normalize_benchmark_result(raw_payload)
     return {
         "batch_run_id": payload["batch_run_id"],
         "case_id": payload["case_id"],

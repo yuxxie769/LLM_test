@@ -18,6 +18,20 @@ from bench.config import load_settings
 from bench.run_single_case import run_case
 
 
+def load_completed_case_ids(benchmark_dir: Path) -> set[str]:
+    return {path.name.removesuffix(".combined.json") for path in benchmark_dir.glob("*.combined.json")}
+
+
+def build_manifest_results(benchmark_dir: Path) -> list[dict[str, str]]:
+    return [
+        {
+            "case_id": path.name.removesuffix(".combined.json"),
+            "combined_path": str(path),
+        }
+        for path in sorted(benchmark_dir.glob("*.combined.json"))
+    ]
+
+
 def load_matrix(path: Path) -> dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
@@ -114,8 +128,18 @@ def main() -> None:
     batch_run_id = args.batch_run_id or datetime.now(timezone.utc).strftime(
         "%Y%m%dT%H%M%SZ"
     )
+    benchmark_dir = settings.raw_benchmark_dir / batch_run_id
+    manifest_path = benchmark_dir / "manifest.json"
+    existing_manifest: dict[str, Any] = {}
+    if manifest_path.exists():
+        existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    planned_cases = len(cases)
+    existing_case_ids = load_completed_case_ids(benchmark_dir)
+    cases = [case for case in cases if case.resolved_case_id() not in existing_case_ids]
+
     results: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = list(existing_manifest.get("failures", []))
 
     for case in cases:
         try:
@@ -125,20 +149,21 @@ def main() -> None:
             failures.append({"case": case.__dict__, "error": str(exc)})
             break
 
+    manifest_results = build_manifest_results(benchmark_dir)
     manifest = {
         "batch_run_id": batch_run_id,
         "matrix": str(matrix_path),
         "executed_at": datetime.now(timezone.utc).isoformat(),
         "requested_suites": suites,
         "run_mode": "matrix",
-        "planned_cases": len(cases),
-        "completed_cases": len(results),
+        "planned_cases": planned_cases,
+        "completed_cases": len(manifest_results),
         "failed_cases": len(failures),
+        "skipped_existing_cases": len(existing_case_ids),
         "stopped_early": bool(failures),
-        "results": results,
+        "results": manifest_results,
         "failures": failures,
     }
-    manifest_path = settings.raw_benchmark_dir / batch_run_id / "manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),

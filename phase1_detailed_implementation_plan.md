@@ -2,6 +2,19 @@
 
 更新时间：2026-06-27
 
+## 兼容性补充（2026-06-28）
+
+本文件原始假设基于 `RTX 4080 16GB + vllm 0.23.0`。在当前 `Tesla V100S 32GB` 机器上，需要追加以下兼容层：
+
+- `torch 2.11.0+cu130` 不支持 `sm_70`，必须降到 `torch 2.6.0+cu124`。
+- 与之配套的 `vllm` 版本需要降到 `0.8.5.post1`，否则服务进程会在 CUDA kernel 初始化阶段失败。
+- `transformers` 不能继续使用 `5.x`，否则旧版 `vllm` 会在 tokenizer 初始化时出现 `Qwen2Tokenizer has no attribute all_special_tokens_extended`。当前已固定到 `transformers 4.51.3` 与 `tokenizers 0.21.1`。
+- `scripts/run_vllm_local.sh` 已增加两类兼容处理：
+  - 自动优先本机存在的模型目录 `/root/autodl-tmp/qwen2.5-0.5b`
+  - 仅当当前 `vllm serve --help` 实际支持时才追加 `--offload-backend`
+- `scripts/verify_phase1_local.sh` 已把 `VLLM_MAX_NUM_BATCHED_TOKENS` 的默认值修到 `512`，避免旧版 `vllm` 出现 `max_num_batched_tokens < max_model_len` 的启动失败。
+
+
 ## 1. 目标
 
 本文件用于把 [phase0_phase1_local_wsl_plan.md](./phase0_phase1_local_wsl_plan.md) 中的 `Phase 1` 从“方向性方案”收敛成可直接执行的实施说明。
