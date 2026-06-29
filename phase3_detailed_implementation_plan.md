@@ -6,13 +6,13 @@ Phase 3 的两条主线已经有正式产物：
 
 - 双模型 baseline compare 已完成，输入批次为 normal 7B `phase2-7b-baseline-resampled-20260628T162953Z` 和 AWQ `phase2-awq-baseline-resampled-20260628T221900Z`。产物位于 `results/model_compare/`，详细分析见 [model_compare_detailed_analysis.md](./results/model_compare/model_compare_detailed_analysis.md)。
 - AWQ 参数 sweep 已完成并校验通过，正式 warmup 后统计批次为 `phase3-formal-awq-gpu-warmup-20260628T1556Z`。产物位于 `results/param_tuning/`，最终调用建议见 [awq_full_gpu_vs_phase2_analysis.md](./results/param_tuning/awq_full_gpu_vs_phase2_analysis.md)。
-- 当前结论：AWQ 在同 workload 下 `24/24` 个 case 吞吐高于 normal 7B，`24/24` 个 case P95 latency 更低；后续默认调用配置建议为 `max_model_len=3072`、`max_num_batched_tokens=4096`、`max_num_seqs=32`。
-- 收尾限制：当前参数 sweep 主要覆盖 `concurrency=8, input=512, output=128`，还不能解释 Phase 2 最差压力点 `concurrency=16, input=2048, output=512` 下 prefill 与 batching 参数的影响。
-- 收尾补实验：新增长上下文网格 `concurrency=8/16, input=2048, output=128/512, max_model_len=3072/4096, max_num_batched_tokens=4096/8192`，用于验证长输入下 `prefill`、batching 和 tail latency 的真实 trade-off。
-- 注意：当前 `gpu_memory_used_mb_after` 是 vLLM 进程级显存/预留口径，不等价于纯模型权重大小；不要把 AWQ 的推荐依据写成“显著节省 nvidia-smi 显存”。
-- 显存收尾要求：每轮服务启动必须记录启动前 GPU memory、服务健康后 GPU memory、停止后 GPU memory，并解析 vLLM startup log 中的 model weights memory、GPU KV cache size、GPU/CPU blocks、CUDA graph / allocator 相关线索。
+- 长上下文补实验已完成，批次为 `phase3-long-context-awq-20260629T065835Z`，单独产物位于 `results/param_tuning_long_context/`，并已合并回主 `results/param_tuning/` 形成 `25` 行汇总结果。
+- 详细显存分解 baseline 已完成，批次为 normal `phase2-7b-baseline-detailed-20260629T052330Z` 与 AWQ `phase2-awq-baseline-detailed-20260629T143227Z`。两者都记录了启动前 GPU memory、服务健康后 GPU memory、停止后 GPU memory，以及 vLLM startup log 中的 model weights memory、available KV cache memory、GPU KV cache size、CUDA graph / allocator 线索。
+- 当前结论仍然成立：AWQ 在同 workload 下 `24/24` 个 case 吞吐高于 normal 7B，`24/24` 个 case P95 latency 更低；后续默认调用配置仍建议为 `max_model_len=3072`、`max_num_batched_tokens=4096`、`max_num_seqs=32`。
+- 长上下文补实验把默认值结论补到了 `input=2048`。在 `c8` 下，`max_model_len=3072/4096` 差异很小，`max_num_batched_tokens=8192` 没有带来稳定收益；在 `c16` 下，`max_model_len=4096` 明显改善 QPS、TTFT 和 P95，尤其是 `out512` 时最优点稳定落在 `4096/4096`。
+- 显存分解结论也已经闭环：AWQ 权重显存从 normal 的 `14.19 GiB` 降到 `5.2 GiB`，但 vLLM 同时把可用 KV cache 从 `12.7 GiB` 扩到 `22.26 GiB`，所以服务健康后的 `nvidia-smi used` 没有按权重比例下降。不要再把 AWQ 推荐依据写成“显著节省最终显存占用”。
 
-更新时间：2026-06-28
+更新时间：2026-06-29
 
 ## 兼容性补充（2026-06-28）
 
