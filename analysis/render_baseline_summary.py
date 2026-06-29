@@ -16,11 +16,17 @@ def load_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def _safe_float(value: str) -> float:
+def _safe_float(value: str | None) -> float:
+    if value in (None, ""):
+        return 0.0
     try:
         return float(value)
     except ValueError:
         return 0.0
+
+
+def _has_nonempty_metric(rows: list[dict[str, str]], key: str) -> bool:
+    return any(row.get(key) not in (None, "") for row in rows)
 
 
 def main() -> None:
@@ -44,7 +50,19 @@ def main() -> None:
     batch_run_ids = sorted({row["batch_run_id"] for row in benchmark_rows})
     peak_qps_row = max(benchmark_rows, key=lambda row: _safe_float(row["request_throughput_qps"]))
     worst_latency_row = max(benchmark_rows, key=lambda row: _safe_float(row["p95_e2el_ms"]))
-    worst_waiting_row = max(service_rows, key=lambda row: _safe_float(row["num_requests_waiting_after"])) if service_rows else None
+
+    waiting_metric_key = None
+    waiting_line = None
+    sampling_note = "- This summary is generated from aggregated benchmark outputs and service-side snapshots."
+    if service_rows:
+        if _has_nonempty_metric(service_rows, "num_requests_waiting_during_run_max"):
+            waiting_metric_key = "num_requests_waiting_during_run_max"
+            sampling_note = (
+                "- Service-side gauge metrics were sampled during each case and aggregated as avg/max/p95; "
+                "counter metrics remain before/after deltas."
+            )
+        elif _has_nonempty_metric(service_rows, "num_requests_waiting_after"):
+            waiting_metric_key = "num_requests_waiting_after"
 
     summary = [
         "# Baseline Summary",
@@ -70,15 +88,23 @@ def main() -> None:
         ),
     ]
 
-    if worst_waiting_row is not None:
-        summary.append(
-            (
-                f"- Largest waiting queue snapshot appears at concurrency "
-                f"`{worst_waiting_row['concurrency']}` with "
-                f"`{worst_waiting_row['num_requests_waiting_after']}` waiting requests, "
-                "which is a useful service-side explanation point for tail-latency growth."
+    if waiting_metric_key is not None:
+        worst_waiting_row = max(service_rows, key=lambda row: _safe_float(row.get(waiting_metric_key)))
+        if waiting_metric_key == "num_requests_waiting_during_run_max":
+            waiting_line = (
+                f"- Largest sampled waiting queue during case execution appears at concurrency "
+                f"`{worst_waiting_row['concurrency']}` with an observed max of "
+                f"`{worst_waiting_row[waiting_metric_key]}` waiting requests."
             )
-        )
+        else:
+            waiting_line = (
+                f"- Largest end-of-case waiting queue snapshot appears at concurrency "
+                f"`{worst_waiting_row['concurrency']}` with "
+                f"`{worst_waiting_row[waiting_metric_key]}` waiting requests."
+            )
+
+    if waiting_line is not None:
+        summary.append(waiting_line)
 
     output_path = Path(args.output_path) if args.output_path else settings.results_dir / "baseline_summary.md"
 
@@ -87,7 +113,7 @@ def main() -> None:
             "",
             "## Notes",
             "",
-            "- This summary is generated from aggregated benchmark outputs and service-side snapshots.",
+            sampling_note,
             f"- Review plots and CSV files in `{output_path.parent}` together with the raw JSON files under `results/raw/`.",
         ]
     )

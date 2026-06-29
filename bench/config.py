@@ -27,6 +27,7 @@ class Settings:
     benchmark_stream_num_prompts: int
     benchmark_warmups: int
     benchmark_seed: int
+    service_metrics_poll_interval_s: float
     results_dir: Path
     raw_benchmark_dir: Path
     raw_prometheus_dir: Path
@@ -65,6 +66,9 @@ def load_settings() -> Settings:
         ),
         benchmark_warmups=int(os.environ.get("BENCHMARK_NUM_WARMUPS", "0")),
         benchmark_seed=int(os.environ.get("BENCHMARK_SEED", "20260627")),
+        service_metrics_poll_interval_s=float(
+            os.environ.get("SERVICE_METRICS_POLL_INTERVAL_S", "0.5")
+        ),
         results_dir=results_dir,
         raw_benchmark_dir=results_dir / "raw" / "benchmark",
         raw_prometheus_dir=results_dir / "raw" / "prometheus",

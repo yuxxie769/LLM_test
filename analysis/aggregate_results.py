@@ -103,17 +103,65 @@ def flatten_service_row(payload: dict) -> dict:
         "prompt_tokens_source": service.get("prompt_tokens_source"),
         "generation_tokens_source": service.get("generation_tokens_source"),
         "request_success_source": service.get("request_success_source"),
+        "service_metrics_during_run_sample_count": service.get(
+            "service_metrics_during_run_sample_count"
+        ),
+        "service_metrics_sampling_interval_s": service.get(
+            "service_metrics_sampling_interval_s"
+        ),
+        "service_metrics_sampling_error_count": service.get(
+            "service_metrics_sampling_error_count"
+        ),
         "kv_cache_usage_perc_before": service["kv_cache_usage_perc_before"],
         "kv_cache_usage_perc_after": service["kv_cache_usage_perc_after"],
+        "kv_cache_usage_perc_during_run_avg": service.get(
+            "kv_cache_usage_perc_during_run_avg"
+        ),
+        "kv_cache_usage_perc_during_run_max": service.get(
+            "kv_cache_usage_perc_during_run_max"
+        ),
+        "kv_cache_usage_perc_during_run_p95": service.get(
+            "kv_cache_usage_perc_during_run_p95"
+        ),
         "num_requests_running_before": service["num_requests_running_before"],
         "num_requests_running_after": service["num_requests_running_after"],
+        "num_requests_running_during_run_avg": service.get(
+            "num_requests_running_during_run_avg"
+        ),
+        "num_requests_running_during_run_max": service.get(
+            "num_requests_running_during_run_max"
+        ),
+        "num_requests_running_during_run_p95": service.get(
+            "num_requests_running_during_run_p95"
+        ),
         "num_requests_waiting_before": service["num_requests_waiting_before"],
         "num_requests_waiting_after": service["num_requests_waiting_after"],
+        "num_requests_waiting_during_run_avg": service.get(
+            "num_requests_waiting_during_run_avg"
+        ),
+        "num_requests_waiting_during_run_max": service.get(
+            "num_requests_waiting_during_run_max"
+        ),
+        "num_requests_waiting_during_run_p95": service.get(
+            "num_requests_waiting_during_run_p95"
+        ),
         "server_load_before": service.get("server_load_before"),
         "server_load_after": service.get("server_load_after"),
+        "server_load_during_run_avg": service.get("server_load_during_run_avg"),
+        "server_load_during_run_max": service.get("server_load_during_run_max"),
+        "server_load_during_run_p95": service.get("server_load_during_run_p95"),
         "gpu_memory_used_mb_before": service["gpu_memory_used_mb_before"],
         "gpu_memory_used_mb_after": service["gpu_memory_used_mb_after"],
         "gpu_memory_used_mb_delta": service["gpu_memory_used_mb_delta"],
+        "gpu_memory_used_mb_during_run_avg": service.get(
+            "gpu_memory_used_mb_during_run_avg"
+        ),
+        "gpu_memory_used_mb_during_run_max": service.get(
+            "gpu_memory_used_mb_during_run_max"
+        ),
+        "gpu_memory_used_mb_during_run_p95": service.get(
+            "gpu_memory_used_mb_during_run_p95"
+        ),
     }
 
 

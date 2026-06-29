@@ -1,0 +1,48 @@
+model_compare:
+  suite: baseline
+  dimensions:
+    concurrency: [1, 4, 8, 16]
+    input_tokens: [128, 512, 2048]
+    output_tokens: [128, 512]
+
+param_tuning:
+  fixed_workload:
+    suite: phase3_tuning
+    mode: non_stream
+    concurrency: 8
+    input_tokens: 512
+    output_tokens: 128
+    warmup_repeats: 1
+    repeat: 2
+    num_prompts: 40
+  baseline_params:
+    max_model_len: 3072
+    max_num_batched_tokens: 4096
+    max_num_seqs: 32
+    gpu_memory_utilization: 0.9
+  tuning_targets:
+    max_model_len:
+      values: [2048, 3072, 4096]
+    max_num_batched_tokens:
+      values: [2048, 4096, 8192]
+    max_num_seqs:
+      values: [16, 32, 64]
+
+long_context_tuning:
+  enabled: true
+  tuning_target: long_context_grid
+  fixed_params:
+    max_num_seqs: 32
+    gpu_memory_utilization: 0.9
+  workload_matrix:
+    suite: phase3_long_context_tuning
+    mode: non_stream
+    concurrency: [8, 16]
+    input_tokens: [2048]
+    output_tokens: [128, 512]
+    warmup_repeats: 1
+    repeat: 2
+    num_prompts: 40
+  parameter_grid:
+    max_model_len: [3072, 4096]
+    max_num_batched_tokens: [4096, 8192]

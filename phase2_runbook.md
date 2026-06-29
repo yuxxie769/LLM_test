@@ -25,11 +25,16 @@
 - AWQ 的硬件门槛已经不再是当前机器的阻塞项：本机 GPU 计算能力为 `12.0`，而当前安装的 `vllm 0.23.0` 中 `AWQConfig.get_min_capability()` 返回 `75`。
 - 本机当前已经存在本地 AWQ 权重目录：`/root/autodl-tmp/qwen2.5-7b-awq`。
 - `7B-AWQ baseline` 已实际跑完并校验通过：`batch_run_id=phase2-awq-baseline-20260628T124711Z`。
-- 本次 AWQ baseline 的关键产物位于：
-  - `results/raw/benchmark/phase2-awq-baseline-20260628T124711Z/`
-  - `results/raw/prometheus/phase2-awq-baseline-20260628T124711Z/`
-  - `results/batches/phase2-awq-baseline-20260628T124711Z/`
-- 使用 `./.venv/bin/python3 analysis/validate_batch.py --batch-run-id phase2-awq-baseline-20260628T124711Z --output-dir results/batches/phase2-awq-baseline-20260628T124711Z` 复核后，结果为 `expected_cases=48`、`completed_cases=48`、`failed_cases=0`、`errors=[]`。
+- 由于首轮 AWQ baseline 只采了 case 前后两个服务侧快照，它仍然适合看 `counter` 类指标，但不足以解释排队、KV cache 压力和服务负载过程。
+- 为了解决这个问题，仓库现在已经把服务侧 `gauge` 指标改成“case 运行期间周期采样并聚合 `avg/max/p95`”，对应配置项是 `SERVICE_METRICS_POLL_INTERVAL_S`，默认 `0.5` 秒。
+- 使用新采样方式重跑后的完整 AWQ baseline 已校验通过：`batch_run_id=phase2-awq-baseline-resampled-20260628T221900Z`。
+- 使用同一新采样链路重跑的非量化 7B baseline 已校验通过：`batch_run_id=phase2-7b-baseline-resampled-20260628T162953Z`，详细分析见 [baseline_detailed_analysis.md](./results/batches/phase2-7b-baseline-resampled-20260628T162953Z/baseline_detailed_analysis.md)。
+- 本次 resampled AWQ baseline 的关键产物位于：
+  - `results/raw/benchmark/phase2-awq-baseline-resampled-20260628T221900Z/`
+  - `results/raw/prometheus/phase2-awq-baseline-resampled-20260628T221900Z/`
+  - `results/batches/phase2-awq-baseline-resampled-20260628T221900Z/`
+- 使用 `./.venv/bin/python3 analysis/validate_batch.py --batch-run-id phase2-awq-baseline-resampled-20260628T221900Z --output-dir results/batches/phase2-awq-baseline-resampled-20260628T221900Z` 复核后，结果为 `expected_cases=48`、`completed_cases=48`、`failed_cases=0`、`errors=[]`。
+- 这次 resampled 结果里，`service_metrics_during_run_sample_count` 在所有 `48` 个 case 上都非零，`num_requests_running_during_run_max` 与 `kv_cache_usage_perc_during_run_max` 也都成功落盘；但 `num_requests_waiting_during_run_max` 与 `server_load_during_run_max` 整批仍为 `0.0`，因此当前更适合用它说明“未观测到服务侧等待队列”和“KV cache 压力较低”，不适合把 `server_load` 当主要解释变量。更完整的数据解读见 [phase2_awq_resampled_baseline_analysis_20260628.md](./phase2_awq_resampled_baseline_analysis_20260628.md)，核心判断是当前 AWQ baseline 主要由输出长度/解码阶段和高并发竞争主导，不是由 KV cache 或 vLLM waiting queue 主导。
 
 下文若提到旧的 `V100S` 或 `RTX 4080` 兼容性背景，均只保留作历史上下文，不再代表当前机器的主结论。
 

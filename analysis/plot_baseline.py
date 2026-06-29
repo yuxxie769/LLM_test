@@ -31,11 +31,18 @@ def ensure_matplotlib():
     return plt
 
 
+def _has_nonempty_metric(rows: list[dict[str, str]], metric_key: str) -> bool:
+    return any(row.get(metric_key) not in (None, "") for row in rows)
+
+
 def grouped_series(rows: list[dict[str, str]], metric_key: str) -> dict[str, list[tuple[int, float]]]:
     series: dict[str, list[tuple[int, float]]] = defaultdict(list)
     for row in rows:
+        raw_value = row.get(metric_key)
+        if raw_value in (None, ""):
+            continue
         label = f"in{row['input_tokens']}_out{row['output_tokens']}"
-        series[label].append((int(row["concurrency"]), float(row[metric_key])))
+        series[label].append((int(row["concurrency"]), float(raw_value)))
     for points in series.values():
         points.sort(key=lambda item: item[0])
     return dict(series)
@@ -50,8 +57,11 @@ def plot_metric(
     output_path: Path,
 ) -> None:
     plt = ensure_matplotlib()
+    series_by_label = grouped_series(rows, metric_key)
+    if not series_by_label:
+        return
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    for label, points in grouped_series(rows, metric_key).items():
+    for label, points in series_by_label.items():
         ax.plot(
             [point[0] for point in points],
             [point[1] for point in points],
@@ -109,13 +119,47 @@ def main() -> None:
         ylabel="P95 Latency (ms)",
         output_path=plots_dir / "baseline_p95_latency.png",
     )
+
+    waiting_metric_key = (
+        "num_requests_waiting_during_run_max"
+        if _has_nonempty_metric(service_rows, "num_requests_waiting_during_run_max")
+        else "num_requests_waiting_after"
+    )
+    waiting_title = (
+        "Concurrency vs Max Sampled Waiting Requests"
+        if waiting_metric_key == "num_requests_waiting_during_run_max"
+        else "Concurrency vs Waiting Requests"
+    )
+    waiting_ylabel = (
+        "Max Sampled Waiting Requests"
+        if waiting_metric_key == "num_requests_waiting_during_run_max"
+        else "Waiting Requests"
+    )
     plot_metric(
         rows=service_rows,
-        metric_key="num_requests_waiting_after",
-        title="Concurrency vs Waiting Requests",
-        ylabel="Waiting Requests",
+        metric_key=waiting_metric_key,
+        title=waiting_title,
+        ylabel=waiting_ylabel,
         output_path=plots_dir / "baseline_waiting_requests.png",
     )
+
+    if _has_nonempty_metric(service_rows, "kv_cache_usage_perc_during_run_max"):
+        plot_metric(
+            rows=service_rows,
+            metric_key="kv_cache_usage_perc_during_run_max",
+            title="Concurrency vs Max Sampled KV Cache Usage",
+            ylabel="Max Sampled KV Cache Usage (%)",
+            output_path=plots_dir / "baseline_kv_cache_usage.png",
+        )
+
+    if _has_nonempty_metric(service_rows, "server_load_during_run_max"):
+        plot_metric(
+            rows=service_rows,
+            metric_key="server_load_during_run_max",
+            title="Concurrency vs Max Sampled Server Load",
+            ylabel="Max Sampled Server Load",
+            output_path=plots_dir / "baseline_server_load.png",
+        )
 
 
 if __name__ == "__main__":

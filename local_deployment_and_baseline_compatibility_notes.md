@@ -13,8 +13,10 @@
 - `Phase 1` 已在这套新环境上重新验证通过，`./scripts/verify_phase1_local.sh` 最终输出 `phase1 verification complete`。
 - `Phase 2` 默认模型最小 smoke 已重新验证通过：`batch_run_id=phase2smoke-20260628T111721Z`。
 - `Phase 2` 的 `7B-AWQ baseline` 也已在当前机器实际跑完并校验通过：`batch_run_id=phase2-awq-baseline-20260628T124711Z`。
-- 这次 AWQ baseline 的聚合产物位于 `results/batches/phase2-awq-baseline-20260628T124711Z/`，其中包含 `baseline_metrics.csv`、`baseline_service_metrics.csv` 与 `baseline_summary.md`。
-- `./.venv/bin/python3 analysis/validate_batch.py --batch-run-id phase2-awq-baseline-20260628T124711Z --output-dir results/batches/phase2-awq-baseline-20260628T124711Z` 已返回 `errors: []`，确认 `48` 个预期 case 全部完成、无失败。
+- 由于首轮 AWQ baseline 只采了服务侧前后快照，它更适合验证请求侧指标和服务侧 `counter` 差值，不适合单独解释排队、KV cache 压力与服务负载过程。
+- 仓库随后已把服务侧 `gauge` 指标改成“case 运行期间周期采样并聚合 `avg/max/p95`”，并重新跑通了一次完整 AWQ baseline：`batch_run_id=phase2-awq-baseline-resampled-20260628T221900Z`。
+- 这次 resampled AWQ baseline 的聚合产物位于 `results/batches/phase2-awq-baseline-resampled-20260628T221900Z/`，其中包含 `baseline_metrics.csv`、`baseline_service_metrics.csv`、`baseline_summary.md` 与 `plots/`。
+- `./.venv/bin/python3 analysis/validate_batch.py --batch-run-id phase2-awq-baseline-resampled-20260628T221900Z --output-dir results/batches/phase2-awq-baseline-resampled-20260628T221900Z` 已返回 `errors: []`，确认 `48` 个预期 case 全部完成、无失败。
 - 为了兼容 smoke/小样本批次与 `vllm 0.23.0` 当前这台机器上的指标表现，仓库现已修正：
   - [analysis/aggregate_results.py](./analysis/aggregate_results.py) 会把 `num_prompts` 写入 `baseline_metrics.csv`
   - [analysis/validate_batch.py](./analysis/validate_batch.py) 会按每个 case 的真实 `num_prompts` 校验 `completed`

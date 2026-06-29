@@ -7,7 +7,7 @@
 1. 基于 **vLLM** 部署 Qwen 模型服务，并在前面增加轻量 FastAPI 网关  
 2. 基于原生 benchmark 与服务侧指标，对不同并发、输入长度、输出长度场景做压测，采集 **QPS / P95 / TTFT / TPOT / ITL / error rate / GPU 指标**  
 3. 对关键 serving 参数做对比实验，总结吞吐与延迟 trade-off  
-4. 对比 **FP16/BF16** 与 **AWQ-INT4** 模型在显存、吞吐与延迟上的差异
+4. 复用 **Phase 2** 基线链路，对两个候选模型在显存、吞吐与延迟上的差异做直接对比
 
 ---
 
@@ -18,7 +18,7 @@
 | 1 | vLLM 部署 + FastAPI 网关 | 可运行的推理服务 |
 | 2 | 原生 benchmark + 指标采集 | 矩阵编排脚本 + 两层指标采集 + baseline 报告 |
 | 3 | 参数调优 | 参数对比实验 + 调优结论 |
-| 4 | FP16/BF16 vs AWQ-INT4 对比 | 量化对比报告 |
+| 4 | 双模型基线对比 | 模型对比报告 |
 
 ---
 
@@ -27,15 +27,15 @@
 推荐执行顺序：
 
 ```text
-Phase 0 → Phase 1 → Phase 2 → Phase 4 → Phase 3
+Phase 0 → Phase 1 → Phase 2 → Phase 3
 ```
 
 原因：
 
 - `Phase 1` 是服务基线，后面都依赖它
 - `Phase 2` 先建立 baseline 指标
-- `Phase 4` 只需切换模型重跑，更容易先产出结果
-- `Phase 3` 需要基于 baseline 和模型选择做参数 sweep，放最后最稳
+- `Phase 3` 先直接复用 `Phase 2` 基线链路完成双模型对比，再在选定主模型上做参数 sweep
+- 这样可以避免维护一个独立 `Phase 4` 分支，同时保留原本需要的模型对比结论
 
 ## 当前机器兼容性补记
 
@@ -48,7 +48,7 @@ Phase 0 → Phase 1 → Phase 2 → Phase 4 → Phase 3
 因此，后续解释计划产出时要区分两层结论：
 
 - `Phase 1/2` 的本地链路验证、baseline 指标采集、脚本兼容性适配，已经可以在这台 `V100S 32GB` 上完成。
-- `Phase 4` 的 `FP16/BF16 vs AWQ-INT4` 正式对比，仍需要切回 `sm_75+` 的 GPU，或者更换为支持 AWQ 的机器执行。
+- 如果双模型对比中的第二个模型依赖 AWQ，那么正式对比仍需要切回 `sm_75+` 的 GPU，或者更换为支持 AWQ 的机器执行。
 
 ---
 
@@ -324,89 +324,45 @@ llm-bench/
 
 ---
 
-## Phase 4：FP16/BF16 vs AWQ-INT4 对比
-
-### 4.1 目标
-
-这一步的目标是证明：
-
-- 量化模型显存占用是否明显下降
-- 吞吐和延迟是否出现可观察的 trade-off
-
-这一步**不是**证明你自己实现了量化算法。
-
-### 4.2 模型启动方式
-
-```bash
-# baseline
-vllm serve Qwen/Qwen2.5-7B-Instruct \
-  --served-model-name qwen-7b \
-  --dtype float16 \
-  --port 8100
-
-# quantized
-vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
-  --served-model-name qwen-7b-awq \
-  --quantization awq \
-  --dtype float16 \
-  --port 8100
-```
-
-### 4.3 对比维度
-
-- 模型加载显存
-- 压测期间峰值显存
-- `QPS`
-- `P50 / P95 latency`
-- `tokens/s`
-- `error rate`
-
-### 4.4 实验设计
-
-固定 workload：
-
-- 并发：`1 / 4 / 8 / 16`
-- 输入长度：`512`
-- 输出长度：`256`
-
-流程：
-
-1. 跑 baseline 模型
-2. 记录显存与压测结果
-3. 切到 AWQ 模型
-4. 记录相同 workload 下结果
-5. 输出对比表
-
-### 4.5 产物
-
-- `results/quant_compare.csv`
-- `results/quant_compare_summary.md`
-
-### 4.6 注意事项
-
-- 不要在计划里预先写死“显存下降 65%”这类数字
-- 所有结论以实测为准
-- 简历上可以写“完成 FP16/BF16 与 AWQ-INT4 模型服务对比实验”
-
-### 4.7 验收标准
-
-- [ ] 完成 baseline 与 AWQ 的同 workload 对比
-- [ ] 输出对比表和 1 段结论
-- [ ] 能解释“显存节省”和“吞吐/延迟变化”之间的关系
-
----
-
-## Phase 3：参数调优实验
+## Phase 3：双模型基线对比 + 参数调优实验
 
 ### 3.1 前提
 
 只在以下条件满足后再开始：
 
 - baseline 压测已完成
-- AWQ 对比已完成
-- 你已经知道哪种模型形态更适合作为主报告对象
+- 至少已经有两个候选模型的 `Phase 2` batch 输出，或者已经决定先用当前稳定主模型完成 sweep 开发
 
-### 3.2 观测目标
+### 3.2 第一段：直接复用 Phase 2 做双模型对比
+
+这一步不再单独开一个 `Phase 4`，而是直接复用 `Phase 2` 已经验证过的基线矩阵和聚合链路。
+
+目标：
+
+- 让两个模型在同一组 `Phase 2` workload 下直接对齐
+- 输出一份统一的模型对比表和结论摘要
+- 用这份结果决定 `Phase 3` 第二段的主模型
+
+对比维度：
+
+- `QPS`
+- `P95 latency`
+- `tokens/s`
+- `error rate`
+- `GPU memory used`
+
+产物：
+
+- `results/model_compare/model_compare.csv`
+- `results/model_compare/model_compare_summary.md`
+
+验收标准：
+
+- [ ] 两个模型有重叠 workload 的可比结果
+- [ ] 输出统一对比表和摘要
+- [ ] 能解释模型切换带来的吞吐、延迟和显存差异
+
+### 3.3 第二段：在选定主模型上做参数 sweep
 
 重点关注：
 
@@ -415,29 +371,40 @@ vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
 - 显存压力
 - `QPS / P95 / tokens/s`
 
-### 3.3 重点参数
+### 3.4 重点参数
 
 第一版只扫 3 个：
 
 | 参数 | 实验取值 |
 |------|---------|
-| `--max-model-len` | 2048, 4096, 8192 |
+| `--max-model-len` | 2048, 3072, 4096 |
 | `--max-num-batched-tokens` | 2048, 4096, 8192 |
 | `--max-num-seqs` | 16, 32, 64 |
 
 `--gpu-memory-utilization` 暂时不放第一版 sweep 主线，除非你后面时间充裕。
 
-### 3.4 固定 workload
+### 3.5 固定 workload
 
 统一使用：
 
 - 并发：`8`
 - 输入长度：`512`
-- 输出长度：`256`
+- 输出长度：`128`
+- warmup：`1` 次
+- 正式 measured repeat：`2` 次
 
-先保持 workload 不变，避免多变量同时变化。
+原因：
 
-### 3.5 观测指标
+- 该 workload 已经在 `Phase 2` 基线矩阵中被覆盖
+- 本地开发验证更快，且仍然足以暴露调度和排队差异
+- 能减少因为输出过长导致的 sweep 单轮耗时
+- 每个参数档位先做 1 次 warmup，再统计 2 次正式 repeat，降低首轮 JIT / graph capture 对调优结论的污染
+
+先保持 workload 不变，避免多变量同时变化。正式 `param_tuning.csv` 与 summary 只汇总 warmup 之后的 measured repeats。
+
+如果 GPU 上已经有常驻模型服务，可以通过更低的 `gpu_memory_utilization` 分批执行 3 组 sweep，再在离线聚合阶段合并多个 manifest。
+
+### 3.6 观测指标
 
 除了压测指标，还可结合 `/metrics` 关注：
 
@@ -447,18 +414,22 @@ vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
 - `avg_prompt_throughput_toks_per_s`
 - `avg_generation_throughput_toks_per_s`
 
-### 3.6 产物
+### 3.7 产物
 
-- `results/param_tuning.csv`
-- `results/param_tuning_summary.md`
+- `results/model_compare/model_compare.csv`
+- `results/model_compare/model_compare_summary.md`
+- `results/param_tuning/param_tuning.csv`
+- `results/param_tuning/param_tuning_summary.md`
+- `results/param_tuning/awq_full_gpu_vs_phase2_analysis.md`
 
-### 3.7 合理结论示例
+### 3.8 合理结论示例
 
 适合写的结论是：
 
 - `max_model_len` 增大后，长上下文支持更强，但显存压力更高，并发容量下降
 - `max_num_batched_tokens` 提升后，吞吐可能改善，但高并发下尾延迟也可能上升
 - `max_num_seqs` 过高时，排队减少未必能转化为更低延迟，需结合实际 workload 取舍
+- 两个模型在同一组 `Phase 2` case 下即使吞吐接近，显存占用和尾延迟也可能体现不同 trade-off
 
 不建议轻易写：
 
@@ -466,8 +437,9 @@ vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
 
 除非你确实采到了对应指标并能解释定义。
 
-### 3.8 验收标准
+### 3.9 验收标准
 
+- [ ] 双模型对比结果完整落盘
 - [ ] 参数 sweep 结果完整落盘
 - [ ] 至少形成 2 到 3 条可信的 trade-off 结论
 - [ ] 能解释参数变化为什么会影响吞吐、延迟和显存
@@ -503,8 +475,8 @@ vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
 
 - [ ] 可运行的 `vLLM + FastAPI` 服务
 - [ ] baseline 压测结果
-- [ ] FP16/BF16 vs AWQ-INT4 对比结果
-- [ ] 参数调优结果
+- [ ] 双模型基线对比结果
+- [ ] 主模型参数调优结果
 - [ ] 一份可写进简历和面试材料的总结文档
 
 ### 最终简历可落的表述
@@ -512,7 +484,7 @@ vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ \
 - 基于 vLLM 部署 Qwen 系列模型服务，封装 OpenAI-compatible API，并通过 FastAPI 实现参数校验、异常处理与结构化日志记录
 - 基于原生 benchmark 工具与服务侧 metrics 构建可复现实验流程，对不同并发、输入长度和输出长度场景进行压测，统计 QPS、P95 latency、TTFT、TPOT、ITL 与错误率等指标
 - 对比 `max_model_len`、`max_num_batched_tokens` 等配置对吞吐、延迟与显存压力的影响，形成推理服务调优结论
-- 完成 FP16/BF16 与 AWQ-INT4 模型服务对比实验，分析量化对显存占用、吞吐与延迟表现的影响
+- 复用同一套 baseline workload 直接对比两个候选模型的显存占用、吞吐与尾延迟表现，并据此选择后续调优主模型
 
 ---
 

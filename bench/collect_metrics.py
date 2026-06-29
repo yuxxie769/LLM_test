@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Event, Thread
 from typing import Callable
 
 
@@ -20,6 +22,43 @@ class MetricSample:
     name: str
     labels: dict[str, str]
     value: float
+
+
+@dataclass
+class ServiceMetricsSampler:
+    base_url: str
+    served_model_name: str | None = None
+    interval_s: float = 0.5
+    snapshots: list[dict] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    _stop_event: Event = field(default_factory=Event, init=False, repr=False)
+    _thread: Thread | None = field(default=None, init=False, repr=False)
+
+    def start(self) -> None:
+        if self.interval_s <= 0:
+            return
+        self._thread = Thread(target=self._run, name="service-metrics-sampler", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> tuple[list[dict], list[str]]:
+        if self._thread is None:
+            return self.snapshots, self.errors
+        self._stop_event.set()
+        self._thread.join(timeout=max(self.interval_s * 4, 5.0))
+        return self.snapshots, self.errors
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                snapshot = collect_service_metrics(self.base_url, self.served_model_name)
+                snapshot["sample_phase"] = "during_run"
+                self.snapshots.append(snapshot)
+            except Exception as exc:  # noqa: BLE001
+                self.errors.append(
+                    f"{datetime.now(timezone.utc).isoformat()} failed to sample service metrics: {exc}"
+                )
+            if self._stop_event.wait(self.interval_s):
+                break
 
 
 def fetch_metrics_text(base_url: str, timeout: float = 5.0) -> str:
@@ -244,13 +283,61 @@ def collect_service_metrics(base_url: str, served_model_name: str | None = None)
     return snapshot
 
 
+def _percentile(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(value) for value in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (len(ordered) - 1) * (percentile / 100.0)
+    lower_index = math.floor(rank)
+    upper_index = math.ceil(rank)
+    if lower_index == upper_index:
+        return ordered[lower_index]
+    lower_value = ordered[lower_index]
+    upper_value = ordered[upper_index]
+    weight = rank - lower_index
+    return lower_value + (upper_value - lower_value) * weight
+
+
+def _summarize_gauge_series(
+    snapshots: list[dict],
+    *,
+    source_key: str,
+    output_prefix: str,
+) -> dict[str, float | int | None]:
+    values = [
+        float(snapshot[source_key])
+        for snapshot in snapshots
+        if snapshot.get(source_key) is not None
+    ]
+    if not values:
+        return {
+            f"{output_prefix}_sample_count": 0,
+            f"{output_prefix}_avg": None,
+            f"{output_prefix}_max": None,
+            f"{output_prefix}_p95": None,
+        }
+    return {
+        f"{output_prefix}_sample_count": len(values),
+        f"{output_prefix}_avg": sum(values) / len(values),
+        f"{output_prefix}_max": max(values),
+        f"{output_prefix}_p95": _percentile(values, 95.0),
+    }
+
+
 def derive_service_delta(
     before: dict,
     after: dict,
     duration_s: float,
     benchmark_result: dict | None = None,
+    samples_during_run: list[dict] | None = None,
+    sample_interval_s: float | None = None,
+    sampling_errors: list[str] | None = None,
 ) -> dict:
     duration_s = max(duration_s, 1e-9)
+    samples_during_run = samples_during_run or []
+    sampling_errors = sampling_errors or []
 
     def delta_or_none(before_value, after_value) -> float | None:
         if before_value is None or after_value is None:
@@ -310,7 +397,7 @@ def derive_service_delta(
         else float(gpu_after) - float(gpu_before)
     )
 
-    return {
+    payload = {
         "duration_s": duration_s,
         "prompt_tokens_delta": prompt_delta,
         "generation_tokens_delta": generation_delta,
@@ -320,6 +407,10 @@ def derive_service_delta(
         "prompt_tokens_source": prompt_source,
         "generation_tokens_source": generation_source,
         "request_success_source": success_source,
+        "service_metrics_during_run_sample_count": len(samples_during_run),
+        "service_metrics_sampling_interval_s": sample_interval_s,
+        "service_metrics_sampling_error_count": len(sampling_errors),
+        "service_metrics_sampling_errors": sampling_errors,
         "kv_cache_usage_perc_before": None if vllm_metrics_absent else before.get("kv_cache_usage_perc"),
         "kv_cache_usage_perc_after": None if vllm_metrics_absent else after.get("kv_cache_usage_perc"),
         "num_requests_running_before": None if vllm_metrics_absent else before.get("num_requests_running"),
@@ -334,6 +425,23 @@ def derive_service_delta(
         "vllm_metric_names_before": before.get("vllm_metric_names", []),
         "vllm_metric_names_after": after.get("vllm_metric_names", []),
     }
+
+    for source_key, output_prefix in (
+        ("num_requests_running", "num_requests_running_during_run"),
+        ("num_requests_waiting", "num_requests_waiting_during_run"),
+        ("kv_cache_usage_perc", "kv_cache_usage_perc_during_run"),
+        ("server_load", "server_load_during_run"),
+        ("gpu_memory_used_mb", "gpu_memory_used_mb_during_run"),
+    ):
+        payload.update(
+            _summarize_gauge_series(
+                samples_during_run,
+                source_key=source_key,
+                output_prefix=output_prefix,
+            )
+        )
+
+    return payload
 
 
 def write_json(path: Path, payload: dict) -> None:

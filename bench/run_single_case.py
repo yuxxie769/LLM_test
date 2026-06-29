@@ -14,6 +14,7 @@ if __package__ in (None, ""):
 
 from bench.benchmark_backends import BenchmarkCase, run_vllm_benchmark
 from bench.collect_metrics import (
+    ServiceMetricsSampler,
     collect_service_metrics,
     derive_service_delta,
     write_json,
@@ -106,21 +107,43 @@ def run_case(
     before_path = prometheus_dir / f"{case_id}.before.json"
     write_json(before_path, before)
 
-    benchmark_execution = run_vllm_benchmark(
-        settings=settings,
-        case=case,
-        result_dir=benchmark_dir,
-        metadata={
-            "suite": case.suite,
-            "mode": case.mode,
-            "case_id": case_id,
-            "concurrency": str(case.concurrency),
-            "input_tokens": str(case.input_tokens),
-            "output_tokens": str(case.output_tokens),
-            "repeat_index": str(case.repeat_index),
-            "batch_run_id": batch_run_id,
-        },
+    sampler = ServiceMetricsSampler(
+        base_url=settings.vllm_base_url,
+        served_model_name=settings.served_model_name,
+        interval_s=settings.service_metrics_poll_interval_s,
     )
+    sampler.start()
+    try:
+        benchmark_execution = run_vllm_benchmark(
+            settings=settings,
+            case=case,
+            result_dir=benchmark_dir,
+            metadata={
+                "suite": case.suite,
+                "mode": case.mode,
+                "case_id": case_id,
+                "concurrency": str(case.concurrency),
+                "input_tokens": str(case.input_tokens),
+                "output_tokens": str(case.output_tokens),
+                "repeat_index": str(case.repeat_index),
+                "batch_run_id": batch_run_id,
+            },
+        )
+    finally:
+        during_run_snapshots, sampling_errors = sampler.stop()
+        samples_path = prometheus_dir / f"{case_id}.samples.json"
+        write_json(
+            samples_path,
+            {
+                "batch_run_id": batch_run_id,
+                "case_id": case_id,
+                "sample_interval_s": settings.service_metrics_poll_interval_s,
+                "sample_count": len(during_run_snapshots),
+                "error_count": len(sampling_errors),
+                "errors": sampling_errors,
+                "snapshots": during_run_snapshots,
+            },
+        )
 
     after = collect_service_metrics(settings.vllm_base_url, settings.served_model_name)
     after_path = prometheus_dir / f"{case_id}.after.json"
@@ -131,6 +154,9 @@ def run_case(
         after,
         float(benchmark_execution["normalized_result"]["duration_s"]),
         benchmark_result=benchmark_execution["normalized_result"],
+        samples_during_run=during_run_snapshots,
+        sample_interval_s=settings.service_metrics_poll_interval_s,
+        sampling_errors=sampling_errors,
     )
     delta_path = prometheus_dir / f"{case_id}.delta.json"
     write_json(delta_path, service_delta)
@@ -143,6 +169,7 @@ def run_case(
         "benchmark_result_path": benchmark_execution["result_path"],
         "prometheus_before_path": str(before_path),
         "prometheus_after_path": str(after_path),
+        "prometheus_samples_path": str(samples_path),
         "prometheus_delta_path": str(delta_path),
         "benchmark": benchmark_execution["normalized_result"],
         "service": service_delta,
