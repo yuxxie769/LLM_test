@@ -44,8 +44,10 @@ def render_memory_decomposition_note(rows: list[dict[str, str]]) -> str:
         'gpu_memory_used_mb_before_start',
         'gpu_memory_used_mb_after_health',
         'vllm_model_weights_memory_gb',
+        'vllm_available_kv_cache_memory_gb',
         'vllm_gpu_kv_cache_size_tokens',
         'vllm_num_gpu_blocks',
+        'vllm_cuda_graph_pool_memory_actual_gb',
         'vllm_startup_cuda_graph_line_count',
         'vllm_startup_allocator_line_count',
     )
@@ -59,7 +61,7 @@ def render_memory_decomposition_note(rows: list[dict[str, str]]) -> str:
         )
     return (
         '- 本轮结果已记录启动阶段显存分解字段，包括启动前 GPU memory、服务健康后 GPU memory、'
-        'vLLM startup log 中的 model weights memory、GPU KV cache size、GPU/CPU blocks 以及 CUDA graph / allocator 线索；'
+        'vLLM startup log 中的 model weights memory、available KV cache memory、GPU KV cache size、GPU/CPU blocks 以及 CUDA graph / allocator 线索；'
         '分析 AWQ 显存收益时应优先使用这些字段，而不是只看最终 nvidia-smi used memory。'
     )
 

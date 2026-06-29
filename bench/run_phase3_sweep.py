@@ -76,11 +76,20 @@ def resolve_gpu_memory_utilization(default_value: float) -> float:
 
 
 MODEL_WEIGHTS_RE = re.compile(
-    r'(?:Loading model weights took|model weights.*?)(?P<value>[0-9]+(?:\.[0-9]+)?)\s*(?P<unit>GiB|GB|MiB|MB)',
+    r'(?:Model loading took|Loading model weights took|model weights.*?)[^0-9]*(?P<value>[0-9]+(?:\.[0-9]+)?)\s*(?P<unit>GiB|GB|MiB|MB)',
+    re.IGNORECASE,
+)
+AVAILABLE_KV_CACHE_MEMORY_RE = re.compile(
+    r'Available KV cache memory:\s*(?P<value>[0-9]+(?:\.[0-9]+)?)\s*(?P<unit>GiB|GB|MiB|MB)',
     re.IGNORECASE,
 )
 GPU_KV_CACHE_SIZE_RE = re.compile(
     r'GPU KV cache size:\s*(?P<value>[0-9,]+)\s*tokens',
+    re.IGNORECASE,
+)
+CUDA_GRAPH_POOL_MEMORY_RE = re.compile(
+    r'CUDA graph pool memory:\s*(?P<actual>[0-9]+(?:\.[0-9]+)?)\s*(?P<actual_unit>GiB|GB|MiB|MB)\s*\(actual\),\s*'
+    r'(?P<estimated>[0-9]+(?:\.[0-9]+)?)\s*(?P<estimated_unit>GiB|GB|MiB|MB)\s*\(estimated\)',
     re.IGNORECASE,
 )
 GPU_BLOCKS_RE = re.compile(
@@ -100,9 +109,12 @@ def parse_vllm_startup_log(log_path: Path) -> dict[str, Any]:
     if not log_path.exists():
         return {
             'model_weights_memory_gb': None,
+            'available_kv_cache_memory_gb': None,
             'gpu_kv_cache_size_tokens': None,
             'num_gpu_blocks': None,
             'num_cpu_blocks': None,
+            'cuda_graph_pool_memory_actual_gb': None,
+            'cuda_graph_pool_memory_estimated_gb': None,
             'cuda_graph_line_count': 0,
             'allocator_line_count': 0,
             'memory_line_count': 0,
@@ -116,9 +128,12 @@ def parse_vllm_startup_log(log_path: Path) -> dict[str, Any]:
     cuda_graph_lines: list[str] = []
     allocator_lines: list[str] = []
     model_weights_memory_gb = None
+    available_kv_cache_memory_gb = None
     gpu_kv_cache_size_tokens = None
     num_gpu_blocks = None
     num_cpu_blocks = None
+    cuda_graph_pool_memory_actual_gb = None
+    cuda_graph_pool_memory_estimated_gb = None
 
     for line in lines:
         lower = line.lower()
@@ -136,9 +151,27 @@ def parse_vllm_startup_log(log_path: Path) -> dict[str, Any]:
                 weights_match.group('unit'),
             )
 
+        available_kv_match = AVAILABLE_KV_CACHE_MEMORY_RE.search(line)
+        if available_kv_match:
+            available_kv_cache_memory_gb = _memory_to_gb(
+                available_kv_match.group('value'),
+                available_kv_match.group('unit'),
+            )
+
         kv_match = GPU_KV_CACHE_SIZE_RE.search(line)
         if kv_match:
             gpu_kv_cache_size_tokens = int(kv_match.group('value').replace(',', ''))
+
+        cuda_graph_pool_match = CUDA_GRAPH_POOL_MEMORY_RE.search(line)
+        if cuda_graph_pool_match:
+            cuda_graph_pool_memory_actual_gb = _memory_to_gb(
+                cuda_graph_pool_match.group('actual'),
+                cuda_graph_pool_match.group('actual_unit'),
+            )
+            cuda_graph_pool_memory_estimated_gb = _memory_to_gb(
+                cuda_graph_pool_match.group('estimated'),
+                cuda_graph_pool_match.group('estimated_unit'),
+            )
 
         blocks_match = GPU_BLOCKS_RE.search(line)
         if blocks_match:
@@ -147,9 +180,12 @@ def parse_vllm_startup_log(log_path: Path) -> dict[str, Any]:
 
     return {
         'model_weights_memory_gb': model_weights_memory_gb,
+        'available_kv_cache_memory_gb': available_kv_cache_memory_gb,
         'gpu_kv_cache_size_tokens': gpu_kv_cache_size_tokens,
         'num_gpu_blocks': num_gpu_blocks,
         'num_cpu_blocks': num_cpu_blocks,
+        'cuda_graph_pool_memory_actual_gb': cuda_graph_pool_memory_actual_gb,
+        'cuda_graph_pool_memory_estimated_gb': cuda_graph_pool_memory_estimated_gb,
         'cuda_graph_line_count': len(cuda_graph_lines),
         'allocator_line_count': len(allocator_lines),
         'memory_line_count': len(memory_lines),
